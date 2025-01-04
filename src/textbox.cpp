@@ -415,7 +415,7 @@ bool TextBox::focus_event(bool focused) {
 bool TextBox::keyboard_event(int key, int /* scancode */, int action, int modifiers) {
     if (m_editable && focused()) {
         if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-            if (key = GLFW_KEY_ESCAPE) {
+            if (key == GLFW_KEY_ESCAPE) {
                 focus_event(false);
             } else if (key == GLFW_KEY_LEFT) {
                 if (modifiers == GLFW_MOD_SHIFT) {
