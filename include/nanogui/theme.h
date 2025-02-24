@@ -223,7 +223,7 @@ public:
 
 protected:
     /// Default destructor does nothing; allows for inheritance.
-    virtual ~Theme() { };
+    virtual ~Theme() { }
 };
 
 NAMESPACE_END(nanogui)

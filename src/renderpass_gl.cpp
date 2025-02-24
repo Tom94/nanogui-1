@@ -4,6 +4,8 @@
 #include <nanogui/texture.h>
 #include "opengl_check.h"
 
+#include <stdexcept>
+
 NAMESPACE_BEGIN(nanogui)
 
 RenderPass::RenderPass(std::vector<Object *> color_targets,
