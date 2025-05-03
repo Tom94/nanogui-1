@@ -426,7 +426,7 @@ target_compile_definitions(nanogui
 
   PRIVATE
     -DNANOGUI_BUILD
-    -DNVG_STB_IMAGE_IMPLEMENTATION
+    # -DNVG_STB_IMAGE_IMPLEMENTATION
 )
 
 target_include_directories(nanogui
