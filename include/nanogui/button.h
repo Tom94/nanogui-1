@@ -106,6 +106,11 @@ public:
     /// Set the button group (for radio buttons)
     void set_button_group(const std::vector<Button *> &button_group) { m_button_group = button_group; }
 
+    /// The padding of this Button.
+    const Vector2i &padding() const { return m_padding; }
+    /// Set the padding of this Button.
+    void set_padding(const Vector2i &padding) { m_padding = padding; }
+
     /// The preferred size of this Button.
     virtual Vector2i preferred_size(NVGcontext *ctx) const override;
     /// The callback that is called when any type of mouse button event is issued to this Button.
@@ -129,6 +134,9 @@ protected:
      * \endrst
      */
     int m_icon;
+
+    /// The padding of this Button.
+    Vector2i m_padding = { 20, 10 };
 
     /// The position to draw the icon at.
     IconPosition m_icon_position;

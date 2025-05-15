@@ -43,7 +43,7 @@ Vector2i Button::preferred_size(NVGcontext *ctx) const {
             iw = w * ih / h;
         }
     }
-    return Vector2i((int)(tw + iw) + 20, font_size + 10);
+    return Vector2i((int)(tw + iw), font_size) + m_padding;;
 }
 
 bool Button::mouse_enter_event(const Vector2i &p, bool enter) {
