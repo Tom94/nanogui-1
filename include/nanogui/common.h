@@ -16,9 +16,11 @@
 #pragma once
 
 #include <stdint.h>
+
+#include <algorithm>
 #include <functional>
-#include <vector>
 #include <string>
+#include <vector>
 
 #define NANOGUI_VERSION_MAJOR 0
 #define NANOGUI_VERSION_MINOR 1
