@@ -3,7 +3,7 @@ if (NOT NANOGUI_BUILD_SHARED)
   set_target_properties(nanogui PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
   if (NANOGUI_BUILD_GLFW)
-    set_target_properties(glfw_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties(glfw PROPERTIES POSITION_INDEPENDENT_CODE ON)
   endif()
 endif()
 
@@ -52,7 +52,7 @@ endif()
 
 if (NANOGUI_INSTALL)
   install(TARGETS nanogui-python
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} 
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
           ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
   set_target_properties(nanogui-python PROPERTIES INSTALL_RPATH "${NANOGUI_ORIGIN}")
 endif()

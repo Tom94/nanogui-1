@@ -222,13 +222,6 @@ if (NANOGUI_BUILD_GLFW)
 
   add_subdirectory(ext/glfw)
 
-  # Two targets have now been defined: `glfw_objects`, which will be merged into
-  # NanoGUI at the end, and `glfw`.  The `glfw` target is the library itself
-  # (e.g., libglfw.so), but can be skipped as we do not need to link against it
-  # (because we merge `glfw_objects` into NanoGUI).  Skipping is required for
-  # XCode, but preferable for all build systems (reduces build artifacts).
-  set_target_properties(glfw PROPERTIES EXCLUDE_FROM_ALL 1 EXCLUDE_FROM_DEFAULT_BUILD 1)
-
   mark_as_advanced(
     GLFW_BUILD_DOCS GLFW_BUILD_EXAMPLES GLFW_BUILD_INSTALL GLFW_BUILD_TESTS
     GLFW_DOCUMENT_INTERNALS GLFW_INSTALL GLFW_USE_CHDIR GLFW_USE_MENUBAR
@@ -369,10 +362,6 @@ if (APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-fobjc-arc)
 endif()
 
-if (NANOGUI_BUILD_GLFW)
-  list(APPEND NANOGUI_EXTRA $<TARGET_OBJECTS:glfw_objects>)
-endif()
-
 # Compile main NanoGUI library
 add_library(nanogui ${NANOGUI_LIBRARY_TYPE}
   # Merge NanoVG into the NanoGUI library
@@ -483,6 +472,10 @@ if (NANOGUI_BUILD_SHARED)
   set_property(TARGET nanogui PROPERTY DEFINE_SYMBOL "")
 else()
   target_link_libraries(nanogui PUBLIC ${NANOGUI_LIBS})
+endif()
+
+if (NANOGUI_BUILD_GLFW)
+  target_link_libraries(nanogui PUBLIC glfw)
 endif()
 
 # Auto-detect GLES include directory on Raspberry PI
