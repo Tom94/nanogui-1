@@ -194,25 +194,15 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     glfwWindowHintString(GLFW_X11_INSTANCE_NAME, caption.c_str());
     glfwWindowHintString(GLFW_WAYLAND_APP_ID, caption.c_str());
 
-    auto drop_callback = [](GLFWwindow *w, int count, const char **filenames) {
-        auto it = __nanogui_screens.find(w);
-        if (it == __nanogui_screens.end())
-            return;
-        Screen *s = it->second;
-        if (!s->m_process_events)
-            return;
-        s->drop_callback_event(count, filenames);
-    };
-
     for (int i = 0; i < 2; ++i) {
         if (fullscreen) {
             GLFWmonitor *monitor = glfwGetPrimaryMonitor();
             const GLFWvidmode *mode = glfwGetVideoMode(monitor);
             m_glfw_window = glfwCreateWindow(mode->width, mode->height,
-                                             caption.c_str(), monitor, nullptr, drop_callback);
+                                             caption.c_str(), monitor, nullptr);
         } else {
             m_glfw_window = glfwCreateWindow(size.x(), size.y(),
-                                             caption.c_str(), nullptr, nullptr, drop_callback);
+                                             caption.c_str(), nullptr, nullptr);
         }
 
         if (m_glfw_window == nullptr && m_float_buffer) {
@@ -337,17 +327,17 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
         }
     );
 
-    // glfwSetDropCallback(m_glfw_window,
-    //     [](GLFWwindow *w, int count, const char **filenames) {
-    //         auto it = __nanogui_screens.find(w);
-    //         if (it == __nanogui_screens.end())
-    //             return;
-    //         Screen *s = it->second;
-    //         if (!s->m_process_events)
-    //             return;
-    //         s->drop_callback_event(count, filenames);
-    //     }
-    // );
+    glfwSetDropCallback(m_glfw_window,
+        [](GLFWwindow *w, int count, const char **filenames) {
+            auto it = __nanogui_screens.find(w);
+            if (it == __nanogui_screens.end())
+                return;
+            Screen *s = it->second;
+            if (!s->m_process_events)
+                return;
+            s->drop_callback_event(count, filenames);
+        }
+    );
 
     glfwSetScrollCallback(m_glfw_window,
         [](GLFWwindow *w, double x, double y) {
