@@ -454,7 +454,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
     m_fbsize = Vector2i((int) w2, (int) h2);
     m_size = Vector2i((int) w, (int) h);
 #elif defined(_WIN32) || defined(__linux__)
-    if (m_pixel_ratio != 1 && !m_fullscreen)
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND && m_pixel_ratio != 1 && !m_fullscreen)
         glfwSetWindowSize(window, m_size.x() * m_pixel_ratio,
                                   m_size.y() * m_pixel_ratio);
 #endif
@@ -590,12 +590,14 @@ void Screen::move_window(const Vector2i &rel) {
 void Screen::set_size(const Vector2i &size) {
     Widget::set_size(size);
 
+    auto targetSize = size;
 #if defined(_WIN32) || defined(__linux__) || defined(EMSCRIPTEN)
-    glfwSetWindowSize(m_glfw_window, size.x() * m_pixel_ratio,
-                                     size.y() * m_pixel_ratio);
-#else
-    glfwSetWindowSize(m_glfw_window, size.x(), size.y());
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        targetSize = Vector2i(size.x() * m_pixel_ratio, size.y() * m_pixel_ratio);
+    }
 #endif
+
+    glfwSetWindowSize(m_glfw_window, targetSize.x(), targetSize.y());
 }
 
 void Screen::clear() {
@@ -627,8 +629,10 @@ void Screen::draw_setup() {
 #endif
 
 #if defined(_WIN32) || defined(__linux__) || defined(EMSCRIPTEN)
-    m_fbsize = m_size;
-    m_size = Vector2i(Vector2f(m_size) / m_pixel_ratio);
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        m_fbsize = m_size;
+        m_size = Vector2i(Vector2f(m_size) / m_pixel_ratio);
+    }
 #else
     /* Recompute pixel ratio on OSX */
     if (m_size[0])
@@ -793,7 +797,9 @@ void Screen::cursor_pos_callback_event(double x, double y) {
     Vector2i p((int) x, (int) y);
 
 #if defined(_WIN32) || defined(__linux__) || defined(EMSCRIPTEN)
-    p = Vector2i(Vector2f(p) / m_pixel_ratio);
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        p = Vector2i(Vector2f(p) / m_pixel_ratio);
+    }
 #endif
 
     m_last_interaction = glfwGetTime();
@@ -943,7 +949,9 @@ void Screen::resize_callback_event(int, int) {
     m_fbsize = fb_size; m_size = size;
 
 #if defined(_WIN32) || defined(__linux__) || defined(EMSCRIPTEN)
-    m_size = Vector2i(Vector2f(m_size) / m_pixel_ratio);
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        m_size = Vector2i(Vector2f(m_size) / m_pixel_ratio);
+    }
 #endif
 
     m_last_interaction = glfwGetTime();
