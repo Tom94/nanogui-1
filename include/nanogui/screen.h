@@ -213,6 +213,9 @@ public:
     /// Does the framebuffer use a floating point representation
     bool has_float_buffer() const { return m_float_buffer; }
 
+    /// Does the floatbuffer use linear sRGB instead of regular sRGB?
+    bool has_linear_srgb() const { return m_linear_srgb; }
+
 #if defined(NANOGUI_USE_METAL)
     /// Return the associated CAMetalLayer object
     void *metal_layer() const;
@@ -298,8 +301,13 @@ protected:
     bool m_depth_buffer;
     bool m_stencil_buffer;
     bool m_float_buffer;
+    bool m_linear_srgb = false;
     bool m_redraw;
     std::function<void(Vector2i)> m_resize_callback;
+#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+    ref<Texture> m_srgb_conversion_texture;
+    ref<Shader> m_srgb_conversion_shader;
+#endif
 #if defined(NANOGUI_USE_METAL)
     void *m_metal_texture = nullptr;
     void *m_metal_drawable = nullptr;

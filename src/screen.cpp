@@ -17,6 +17,8 @@
 #include <nanogui/window.h>
 #include <nanogui/popup.h>
 #include <nanogui/metal.h>
+#include <nanogui/renderpass.h>
+#include <nanogui/shader.h>
 #include <map>
 #include <iostream>
 
@@ -262,6 +264,17 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
       }
     }
 #endif
+
+    // If we managed to allocate a floating point framebuffer and we're either on Windows or on a Wayland compositor that does not support
+    // extended sRGB, use linear sRGB mode.
+    if (m_float_buffer) {
+#ifdef _WIN32
+        m_linear_srgb = true;
+#elif __linux__
+        // TODO: detect when Wayland compositor is configured to use linear colors
+        m_linear_srgb = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && false;
+#endif
+    }
 
     glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
 
@@ -511,6 +524,80 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
     for (size_t i = 0; i < (size_t) Cursor::CursorCount; ++i)
         m_cursors[i] = glfwCreateStandardCursor(GLFW_ARROW_CURSOR + (int) i);
 
+#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+    // Initialize sRGB conversion resources if needed
+    if (m_linear_srgb) {
+        // Create texture for framebuffer copy
+        m_srgb_conversion_texture = new Texture(
+            pixel_format(),
+            component_format(),
+            m_fbsize,
+            Texture::InterpolationMode::Nearest,
+            Texture::InterpolationMode::Nearest,
+            Texture::WrapMode::ClampToEdge,
+            1,
+            Texture::TextureFlags::ShaderRead | Texture::TextureFlags::RenderTarget
+        );
+
+#    if defined(NANOGUI_USE_OPENGL)
+        std::string preamble = "#version 110\n";
+#    elif defined(NANOGUI_USE_GLES)
+        std::string preamble = "#version 100\nprecision highp float;\n";
+#    endif
+        auto vertexShader = preamble + R"glsl(
+            attribute vec2 position;
+            varying vec2 texCoords;
+            void main() {
+                texCoords = position * 0.5 + 0.5; // Convert from [-1, 1] to [0, 1]
+                gl_Position = vec4(position, 1.0, 1.0);
+            }
+        )glsl";
+        auto fragmentShader = preamble + R"glsl(
+            varying vec2 texCoords;
+            uniform sampler2D framebufferTexture;
+
+            float linear(float sRGB) {
+                float outSign = sign(sRGB);
+                sRGB = abs(sRGB);
+                if (sRGB <= 0.04045) {
+                    return outSign * sRGB / 12.92;
+                } else {
+                    return outSign * pow((sRGB + 0.055) / 1.055, 2.4);
+                }
+            }
+
+            void main() {
+                vec4 color = texture2D(framebufferTexture, texCoords);
+                gl_FragColor = vec4(
+                    linear(color.r),
+                    linear(color.g),
+                    linear(color.b),
+                    color.a
+                );
+            }
+        )glsl";
+
+        try {
+            m_srgb_conversion_shader = new Shader(
+                nullptr,
+                "srgb_to_linear",
+                vertexShader,
+                fragmentShader
+            );
+        } catch (const std::runtime_error &e) {
+            fprintf(stderr, "Error creating sRGB conversion shader: %s\n", e.what());
+            m_srgb_conversion_shader = nullptr;
+        }
+
+        uint32_t indices[3 * 2] = { 0, 1, 2, 2, 3, 0 };
+        float positions[2 * 4] = { -1.f, -1.f, 1.f, -1.f, 1.f, 1.f, -1.f, 1.f };
+
+        m_srgb_conversion_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
+        m_srgb_conversion_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
+        m_srgb_conversion_shader->set_texture("framebufferTexture", m_srgb_conversion_texture);
+    }
+#endif
+
     /// Fixes retina display-related font rendering issue (#185)
     nvgBeginFrame(m_nvg_context, m_size[0], m_size[1], m_pixel_ratio);
     nvgEndFrame(m_nvg_context);
@@ -656,6 +743,22 @@ void Screen::draw_setup() {
 
 void Screen::draw_teardown() {
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+    // Apply sRGB to linear conversion if needed
+    if (m_linear_srgb && m_srgb_conversion_shader && m_srgb_conversion_texture) {
+        // Copy the current framebuffer to texture
+        CHK(glBindTexture(GL_TEXTURE_2D, m_srgb_conversion_texture->texture_handle()));
+        CHK(glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, m_fbsize.x(), m_fbsize.y(), 0));
+        CHK(glBindTexture(GL_TEXTURE_2D, 0));
+
+        // Clear the framebuffer
+        CHK(glClear(GL_COLOR_BUFFER_BIT));
+
+        // Render the texture with sRGB to linear conversion
+        m_srgb_conversion_shader->begin();
+        m_srgb_conversion_shader->draw_array(Shader::PrimitiveType::Triangle, 0, 6, true);
+        m_srgb_conversion_shader->end();
+    }
+
     glfwSwapBuffers(m_glfw_window);
 #elif defined(NANOGUI_USE_METAL)
     mnvgSetColorTexture(m_nvg_context, nullptr);
@@ -966,6 +1069,12 @@ void Screen::resize_callback_event(int, int) {
 #if defined(NANOGUI_USE_METAL)
     if (m_depth_stencil_texture)
         m_depth_stencil_texture->resize(fb_size);
+#endif
+
+#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+    if (m_linear_srgb && m_srgb_conversion_texture) {
+        m_srgb_conversion_texture->resize(fb_size);
+    }
 #endif
 
     try {
