@@ -139,9 +139,14 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
       m_stencil_buffer(stencil_buffer), m_float_buffer(float_buffer), m_redraw(false) {
     memset(m_cursors, 0, sizeof(GLFWcursor *) * (int) Cursor::CursorCount);
 
-#ifdef __APPLE__
+#if defined(__APPLE__)
     auto [capability10bit, capabilityEdr] = test_10bit_edr_support();
     if (!capability10bit && !capabilityEdr) {
+        m_float_buffer = false;
+    }
+#elif defined(__linux__)
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND) {
+        // We do not support wide color / HDR on non-Wayland Linux systems
         m_float_buffer = false;
     }
 #endif
@@ -268,9 +273,9 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     // If we managed to allocate a floating point framebuffer and we're either on Windows or on a Wayland compositor that does not support
     // extended sRGB, use linear sRGB mode.
     if (m_float_buffer) {
-#ifdef _WIN32
+#if defined(_WIN32)
         m_linear_srgb = true;
-#elif __linux__
+#elif defined(__linux__)
         // TODO: detect when Wayland compositor is configured to use linear colors
         m_linear_srgb = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && false;
 #endif
