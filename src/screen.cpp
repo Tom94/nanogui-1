@@ -275,14 +275,7 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
         m_linear_srgb = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && false;
 #endif
 
-        auto* hdrConfig = glfwGetHDRConfig(m_glfw_window);
-        if (hdrConfig && hdrConfig->sdr_white_level > 0.0f) {
-            // sRGB white point is 80 nits, which is what tev treats as a color value of 1.0.
-            // To adapt this to the display's SDR level, we thus need to divide it by 80.
-            m_display_sdr_level = hdrConfig->sdr_white_level / 80.0f;
-        } else {
-            m_display_sdr_level = 1.0f;
-        }
+        m_display_sdr_level = glfwGetWindowSdrWhiteLevel(m_glfw_window) / 80.0f;
     }
 
     glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
