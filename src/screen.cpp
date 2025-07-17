@@ -747,11 +747,10 @@ void Screen::draw_setup() {
 
 void Screen::draw_teardown() {
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
-    // Apply sRGB to linear conversion if needed
     if (m_linear_srgb && m_srgb_conversion_shader && m_srgb_conversion_texture) {
         // Copy the current framebuffer to texture
         CHK(glBindTexture(GL_TEXTURE_2D, m_srgb_conversion_texture->texture_handle()));
-        CHK(glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, m_fbsize.x(), m_fbsize.y(), 0));
+        CHK(glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 0, 0, m_fbsize.x(), m_fbsize.y(), 0));
         CHK(glBindTexture(GL_TEXTURE_2D, 0));
 
         // Clear the framebuffer
