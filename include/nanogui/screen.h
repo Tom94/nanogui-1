@@ -302,6 +302,7 @@ protected:
     bool m_stencil_buffer;
     bool m_float_buffer;
     bool m_linear_srgb = false;
+    float m_display_sdr_level = 1.0f;
     bool m_redraw;
     std::function<void(Vector2i)> m_resize_callback;
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)

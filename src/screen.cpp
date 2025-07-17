@@ -274,6 +274,15 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
         // TODO: detect when Wayland compositor is configured to use linear colors
         m_linear_srgb = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && false;
 #endif
+
+        auto* hdrConfig = glfwGetHDRConfig(m_glfw_window);
+        if (hdrConfig && hdrConfig->sdr_white_level > 0.0f) {
+            // sRGB white point is 80 nits, which is what tev treats as a color value of 1.0.
+            // To adapt this to the display's SDR level, we thus need to divide it by 80.
+            m_display_sdr_level = hdrConfig->sdr_white_level / 80.0f;
+        } else {
+            m_display_sdr_level = 1.0f;
+        }
     }
 
     glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
@@ -555,6 +564,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         auto fragmentShader = preamble + R"glsl(
             varying vec2 texCoords;
             uniform sampler2D framebufferTexture;
+            uniform float displaySDRLevel;
 
             float linear(float sRGB) {
                 float outSign = sign(sRGB);
@@ -569,9 +579,9 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             void main() {
                 vec4 color = texture2D(framebufferTexture, texCoords);
                 gl_FragColor = vec4(
-                    linear(color.r),
-                    linear(color.g),
-                    linear(color.b),
+                    linear(color.r) * displaySDRLevel,
+                    linear(color.g) * displaySDRLevel,
+                    linear(color.b) * displaySDRLevel,
                     color.a
                 );
             }
@@ -595,6 +605,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         m_srgb_conversion_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
         m_srgb_conversion_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
         m_srgb_conversion_shader->set_texture("framebufferTexture", m_srgb_conversion_texture);
+        m_srgb_conversion_shader->set_uniform("displaySDRLevel", m_display_sdr_level);
     }
 #endif
 
