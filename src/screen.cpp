@@ -137,6 +137,13 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
       m_stencil_buffer(stencil_buffer), m_float_buffer(float_buffer), m_redraw(false) {
     memset(m_cursors, 0, sizeof(GLFWcursor *) * (int) Cursor::CursorCount);
 
+#ifdef __APPLE__
+    auto [capability10bit, capabilityEdr] = test_10bit_edr_support();
+    if (!capability10bit && !capabilityEdr) {
+        m_float_buffer = false;
+    }
+#endif
+
 #if defined(NANOGUI_USE_OPENGL)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
 
