@@ -45,8 +45,12 @@
 #  if NANOGUI_GLES_VERSION == 2
 #    include <GLES2/gl2ext.h>
 #  elif NANOGUI_GLES_VERSION == 3
-#    include <GLES3/gl2ext.h>
+#    include <GLES3/gl3ext.h>
 #  endif
+#endif
+
+#if not defined(GL_TEXTURE_2D_MULTISAMPLE)
+#define GL_TEXTURE_2D_MULTISAMPLE 0x9100
 #endif
 
 #include <nanovg.h>
