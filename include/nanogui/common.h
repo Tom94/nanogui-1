@@ -203,7 +203,7 @@ class Window;
  * and GLFW on your own, while still using NanoGUI's classes.
  * \endrst
  */
-extern NANOGUI_EXPORT void init();
+extern NANOGUI_EXPORT void init(bool colorManagement = false);
 
 /// Static shutdown; should be called before the application terminates.
 extern NANOGUI_EXPORT void shutdown();

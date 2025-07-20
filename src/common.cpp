@@ -44,7 +44,7 @@ extern std::map<GLFWwindow *, Screen *> __nanogui_screens;
   extern void disable_saved_application_state_osx();
 #endif
 
-void init() {
+void init(bool colorManagement) {
     #if !defined(_WIN32)
         /* Avoid locale-related number parsing issues */
         setlocale(LC_NUMERIC, "C");
@@ -62,6 +62,10 @@ void init() {
             std::cerr << "GLFW error " << error << ": " << descr << std::endl;
         }
     );
+
+    if (colorManagement) {
+        glfwInitHint(GLFW_WAYLAND_COLOR_MANAGEMENT, GLFW_TRUE);
+    }
 
     if (!glfwInit())
         throw std::runtime_error("Could not initialize GLFW!");
