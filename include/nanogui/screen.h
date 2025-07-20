@@ -214,7 +214,7 @@ public:
     bool has_float_buffer() const { return m_float_buffer; }
 
     /// Does the floatbuffer use linear sRGB instead of regular sRGB?
-    bool has_linear_srgb() const { return m_linear_srgb; }
+    bool needs_cm() const { return m_needs_cm; }
 
 #if defined(NANOGUI_USE_METAL)
     /// Return the associated CAMetalLayer object
@@ -280,6 +280,22 @@ public:
     void move_window_to_front(Window *window);
     void draw_widgets();
 
+#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+    uint32_t framebuffer_handle() const;
+#endif
+
+    int display_primaries() const {
+        return m_display_primaries;
+    }
+
+    int display_transfer_function() const {
+        return m_display_transfer_function;
+    }
+
+    void set_display_color_matrix(const Matrix3f &matrix) {
+        m_display_color_matrix = matrix;
+    }
+
 protected:
     GLFWwindow *m_glfw_window = nullptr;
     NVGcontext *m_nvg_context = nullptr;
@@ -301,13 +317,18 @@ protected:
     bool m_depth_buffer;
     bool m_stencil_buffer;
     bool m_float_buffer;
-    bool m_linear_srgb = false;
-    float m_display_sdr_level = 1.0f;
+    bool m_needs_cm = false;
+    float m_display_sdr_level = 80.0f;
+    int m_display_primaries = 1; // sRGB
+    int m_display_transfer_function = 10; // ext sRGB
+    Matrix3f m_display_color_matrix;
     bool m_redraw;
     std::function<void(Vector2i)> m_resize_callback;
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
-    ref<Texture> m_srgb_conversion_texture;
-    ref<Shader> m_srgb_conversion_shader;
+    ref<RenderPass> m_cm_render_pass;
+    ref<Texture> m_cm_texture;
+    ref<Texture> m_cm_depth_texture;
+    ref<Shader> m_cm_shader;
 #endif
 #if defined(NANOGUI_USE_METAL)
     void *m_metal_texture = nullptr;

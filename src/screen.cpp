@@ -164,7 +164,7 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
     glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, NANOGUI_GLES_VERSION);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
 #elif defined(NANOGUI_USE_METAL)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     m_stencil_buffer = stencil_buffer = false;
@@ -193,7 +193,7 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     glfwWindowHint(GLFW_STENCIL_BITS, stencil_bits);
     glfwWindowHint(GLFW_DEPTH_BITS, depth_bits);
 
-#if (defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_METAL)) && defined(GLFW_FLOATBUFFER)
+#if (defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES) || defined(NANOGUI_USE_METAL)) && defined(GLFW_FLOATBUFFER)
     glfwWindowHint(GLFW_FLOATBUFFER, m_float_buffer ? GL_TRUE : GL_FALSE);
 #else
     m_float_buffer = false;
@@ -270,18 +270,20 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     }
 #endif
 
-    // If we managed to allocate a floating point framebuffer and we're either on Windows or on a Wayland compositor that does not support
-    // extended sRGB, use linear sRGB mode.
-    if (m_float_buffer) {
+    // If we managed to allocate a floating point framebuffer and we're on Windows *or* if we are on Wayland, regardless of whether we have
+    // a floating point framebuffer or not, we'll have to perform color management to ensure that colors are displayed correctly.
 #if defined(_WIN32)
-        m_linear_srgb = true;
+    m_needs_cm = m_float_buffer;
 #elif defined(__linux__)
-        // TODO: detect when Wayland compositor is configured to use linear colors
-        m_linear_srgb = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && false;
+    m_needs_cm = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
 #endif
 
-        m_display_sdr_level = glfwGetWindowSdrWhiteLevel(m_glfw_window) / 80.0f;
-    }
+    m_display_sdr_level = glfwGetWindowSdrWhiteLevel(m_glfw_window);
+    m_display_transfer_function = glfwGetWindowTransfer(m_glfw_window);
+    m_display_primaries = glfwGetWindowPrimaries(m_glfw_window);
+    // This matrix should be set according to the display primaries, but nanogui currently doesn't have this functionality.
+    // The matrix is settable via the set_display_color_matrix() method which color-accurate applications should use.
+    m_display_color_matrix = Matrix3f(1.0f);
 
     glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
 
@@ -532,12 +534,11 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         m_cursors[i] = glfwCreateStandardCursor(GLFW_ARROW_CURSOR + (int) i);
 
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
-    // Initialize sRGB conversion resources if needed
-    if (m_linear_srgb) {
-        // Create texture for framebuffer copy
-        m_srgb_conversion_texture = new Texture(
+    // Initialize color management resources if needed
+    if (m_needs_cm) {
+        m_cm_texture = new Texture(
             pixel_format(),
-            component_format(),
+            Texture::ComponentFormat::Float16,
             m_fbsize,
             Texture::InterpolationMode::Nearest,
             Texture::InterpolationMode::Nearest,
@@ -545,6 +546,30 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             1,
             Texture::TextureFlags::ShaderRead | Texture::TextureFlags::RenderTarget
         );
+
+        if (m_stencil_buffer || m_depth_buffer) {
+            m_cm_depth_texture = new Texture(
+                m_stencil_buffer ? Texture::PixelFormat::DepthStencil : Texture::PixelFormat::Depth,
+                Texture::ComponentFormat::UInt32,
+                m_fbsize,
+                Texture::InterpolationMode::Nearest,
+                Texture::InterpolationMode::Nearest,
+                Texture::WrapMode::ClampToEdge,
+                1,
+                Texture::TextureFlags::RenderTarget
+            );
+        }
+
+        m_cm_render_pass = new RenderPass(
+            {m_cm_texture},
+            m_depth_buffer ? m_cm_depth_texture : nullptr,
+            m_stencil_buffer ? m_cm_depth_texture : nullptr,
+            nullptr,
+            true
+        );
+
+        // Disable depth testing. We've only got a depth buffer in order to have a stencil buffer.
+        m_cm_render_pass->set_depth_test(RenderPass::DepthTest::Always, true);
 
 #    if defined(NANOGUI_USE_OPENGL)
         std::string preamble = "#version 110\n";
@@ -563,30 +588,250 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             varying vec2 texCoords;
             uniform sampler2D framebufferTexture;
             uniform float displaySDRLevel;
+            uniform int outTransferFunction;
+            uniform mat3 displayColorMatrix;
 
-            float linear(float sRGB) {
-                float outSign = sign(sRGB);
-                sRGB = abs(sRGB);
-                if (sRGB <= 0.04045) {
-                    return outSign * sRGB / 12.92;
-                } else {
-                    return outSign * pow((sRGB + 0.055) / 1.055, 2.4);
+            //enum eTransferFunction
+            #define CM_TRANSFER_FUNCTION_BT1886     1
+            #define CM_TRANSFER_FUNCTION_GAMMA22    2
+            #define CM_TRANSFER_FUNCTION_GAMMA28    3
+            #define CM_TRANSFER_FUNCTION_ST240      4
+            #define CM_TRANSFER_FUNCTION_EXT_LINEAR 5
+            #define CM_TRANSFER_FUNCTION_LOG_100    6
+            #define CM_TRANSFER_FUNCTION_LOG_316    7
+            #define CM_TRANSFER_FUNCTION_XVYCC      8
+            #define CM_TRANSFER_FUNCTION_SRGB       9
+            #define CM_TRANSFER_FUNCTION_EXT_SRGB   10
+            #define CM_TRANSFER_FUNCTION_ST2084_PQ  11
+            #define CM_TRANSFER_FUNCTION_ST428      12
+            #define CM_TRANSFER_FUNCTION_HLG        13
+
+            // sRGB constants
+            #define SRGB_POW 2.4
+            #define SRGB_CUT 0.0031308
+            #define SRGB_SCALE 12.92
+            #define SRGB_ALPHA 1.055
+
+            #define BT1886_POW (1.0 / 0.45)
+            #define BT1886_CUT 0.018053968510807
+            #define BT1886_SCALE 4.5
+            #define BT1886_ALPHA (1.0 + 5.5 * BT1886_CUT)
+
+            // See http://car.france3.mars.free.fr/HD/INA-%2026%20jan%2006/SMPTE%20normes%20et%20confs/s240m.pdf
+            #define ST240_POW (1.0 / 0.45)
+            #define ST240_CUT 0.0228
+            #define ST240_SCALE 4.0
+            #define ST240_ALPHA 1.1115
+
+            #define ST428_POW 2.6
+            #define ST428_SCALE (52.37 / 48.0)
+
+            // PQ constants
+            #define PQ_M1 0.1593017578125
+            #define PQ_M2 78.84375
+            #define PQ_INV_M1 (1.0 / PQ_M1)
+            #define PQ_INV_M2 (1.0 / PQ_M2)
+            #define PQ_C1 0.8359375
+            #define PQ_C2 18.8515625
+            #define PQ_C3 18.6875
+
+            // HLG constants
+            #define HLG_D_CUT (1.0 / 12.0)
+            #define HLG_E_CUT 0.5
+            #define HLG_A 0.17883277
+            #define HLG_B 0.28466892
+            #define HLG_C 0.55991073
+
+            #define SDR_MIN_LUMINANCE 0.2
+            #define SDR_MAX_LUMINANCE 80.0
+            #define HDR_MIN_LUMINANCE 0.005
+            #define HDR_MAX_LUMINANCE 10000.0
+            #define HLG_MAX_LUMINANCE 1000.0
+
+            #define M_E 2.718281828459045
+
+            vec3 mixb(vec3 a, vec3 b, bvec3 mask) {
+                return mix(a, b, vec3(mask));
+            }
+
+            // The primary source for these transfer functions is https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.1361-0-199802-W!!PDF-E.pdf
+            // Outputs are assumed to have 1 == SDR White which is different for each transfer function.
+            vec3 tfInvPQ(vec3 color) {
+                vec3 E = pow(clamp(color.rgb, vec3(0.0), vec3(1.0)), vec3(PQ_INV_M2));
+                return pow(
+                    (max(E - PQ_C1, vec3(0.0))) / (PQ_C2 - PQ_C3 * E),
+                    vec3(PQ_INV_M1)
+                ) * 10000.0 / 203.0;
+            }
+
+            vec3 tfInvHLG(vec3 color) {
+                bvec3 isLow = lessThanEqual(color.rgb, vec3(HLG_E_CUT));
+                vec3 lo = color.rgb * color.rgb / 3.0;
+                vec3 hi = (exp((color.rgb - HLG_C) / HLG_A) + HLG_B) / 12.0;
+                return mixb(hi, lo, isLow) * 1000.0 / 203.0;
+            }
+
+            // Many transfer functions (including sRGB) follow the same pattern: a linear
+            // segment for small values and a power function for larger values. The
+            // following function implements this pattern from which sRGB, BT.1886, and
+            // others can be derived by plugging in the right constants.
+            vec3 tfInvLinPow(vec3 color, float gamma, float thres, float scale, float alpha) {
+                bvec3 isLow = lessThanEqual(color.rgb, vec3(thres * scale));
+                vec3 lo = color.rgb / scale;
+                vec3 hi = pow((color.rgb + alpha - 1.0) / alpha, vec3(gamma));
+                return mixb(hi, lo, isLow);
+            }
+
+            vec3 tfInvSRGB(vec3 color) {
+                return tfInvLinPow(color, SRGB_POW, SRGB_CUT, SRGB_SCALE, SRGB_ALPHA);
+            }
+
+            vec3 tfInvExtSRGB(vec3 color) {
+                // EXT sRGB is the sRGB transfer function mirrored around 0.
+                return sign(color) * tfInvSRGB(abs(color));
+            }
+
+            vec3 tfInvBT1886(vec3 color) {
+                return tfInvLinPow(color, BT1886_POW, BT1886_CUT, BT1886_SCALE, BT1886_ALPHA);
+            }
+
+            vec3 tfInvXVYCC(vec3 color) {
+                // The inverse transfer function for XVYCC is the BT1886 transfer function mirrored around 0,
+                // same as what EXT sRGB is to sRGB.
+                return sign(color) * tfInvBT1886(abs(color));
+            }
+
+            vec3 tfInvST240(vec3 color) {
+                return tfInvLinPow(color, ST240_POW, ST240_CUT, ST240_SCALE, ST240_ALPHA);
+            }
+
+            // Forward transfer functions corresponding to the inverse functions above.
+            // Inputs are assumed to have 1 == 80 nits!
+            vec3 tfPQ(vec3 color) {
+                color *= 80.0 / 10000.0;
+                vec3 E = pow(clamp(color.rgb, vec3(0.0), vec3(1.0)), vec3(PQ_M1));
+                return pow(
+                    (vec3(PQ_C1) + PQ_C2 * E) / (vec3(1.0) + PQ_C3 * E),
+                    vec3(PQ_M2)
+                );
+            }
+
+            vec3 tfHLG(vec3 color) {
+                color *= 80.0 / 1000.0;
+                bvec3 isLow = lessThanEqual(color.rgb, vec3(HLG_D_CUT));
+                vec3 lo = sqrt(max(color.rgb, vec3(0.0)) * 3.0);
+                vec3 hi = HLG_A * log(max(12.0 * color.rgb - HLG_B, vec3(0.0001))) + HLG_C;
+                return mixb(hi, lo, isLow);
+            }
+
+            vec3 tfLinPow(vec3 color, float gamma, float thres, float scale, float alpha) {
+                bvec3 isLow = lessThanEqual(color.rgb, vec3(thres));
+                vec3 lo = color.rgb * scale;
+                vec3 hi = pow(color.rgb, vec3(1.0 / gamma)) * alpha - (alpha - 1.0);
+                return mixb(hi, lo, isLow);
+            }
+
+            vec3 tfSRGB(vec3 color) {
+                return tfLinPow(color, SRGB_POW, SRGB_CUT, SRGB_SCALE, SRGB_ALPHA);
+            }
+
+            vec3 tfExtSRGB(vec3 color) {
+                // EXT sRGB is the sRGB transfer function mirrored around 0.
+                return sign(color) * tfSRGB(abs(color));
+            }
+
+            vec3 tfBT1886(vec3 color) {
+                return tfLinPow(color, BT1886_POW, BT1886_CUT, BT1886_SCALE, BT1886_ALPHA);
+            }
+
+            vec3 tfXVYCC(vec3 color) {
+                // The transfer function for XVYCC is the BT1886 transfer function mirrored around 0,
+                // same as what EXT sRGB is to sRGB.
+                return sign(color) * tfBT1886(abs(color));
+            }
+
+            vec3 tfST240(vec3 color) {
+                return tfLinPow(color, ST240_POW, ST240_CUT, ST240_SCALE, ST240_ALPHA);
+            }
+
+            vec3 toLinearRGB(vec3 color, int tf) {
+                switch (tf) {
+                    case CM_TRANSFER_FUNCTION_EXT_LINEAR:
+                        return color;
+                    case CM_TRANSFER_FUNCTION_ST2084_PQ:
+                        return tfInvPQ(color);
+                    case CM_TRANSFER_FUNCTION_GAMMA22:
+                        return pow(max(color, vec3(0.0)), vec3(2.2));
+                    case CM_TRANSFER_FUNCTION_GAMMA28:
+                        return pow(max(color, vec3(0.0)), vec3(2.8));
+                    case CM_TRANSFER_FUNCTION_HLG:
+                        return tfInvHLG(color);
+                    case CM_TRANSFER_FUNCTION_EXT_SRGB:
+                        return tfInvExtSRGB(color);
+                    case CM_TRANSFER_FUNCTION_BT1886:
+                        return tfInvBT1886(color);
+                    case CM_TRANSFER_FUNCTION_ST240:
+                        return tfInvST240(color);
+                    case CM_TRANSFER_FUNCTION_LOG_100:
+                        return mixb(exp((color - 1.0) * 2.0 * log(10.0)), vec3(0.0), lessThanEqual(color, vec3(0.0)));
+                    case CM_TRANSFER_FUNCTION_LOG_316:
+                        return mixb(exp((color - 1.0) * 2.5 * log(10.0)), vec3(0.0), lessThanEqual(color, vec3(0.0)));
+                    case CM_TRANSFER_FUNCTION_XVYCC:
+                        return tfInvXVYCC(color);
+                    case CM_TRANSFER_FUNCTION_ST428:
+                        return pow(max(color, vec3(0.0)), vec3(ST428_POW)) * ST428_SCALE;
+                    case CM_TRANSFER_FUNCTION_SRGB:
+                    default:
+                        return tfInvSRGB(color);
+                }
+            }
+
+            vec3 fromLinearRGB(vec3 color, int tf) {
+                switch (tf) {
+                    case CM_TRANSFER_FUNCTION_EXT_LINEAR:
+                        return color;
+                    case CM_TRANSFER_FUNCTION_ST2084_PQ:
+                        return tfPQ(color);
+                    case CM_TRANSFER_FUNCTION_GAMMA22:
+                        return pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+                    case CM_TRANSFER_FUNCTION_GAMMA28:
+                        return pow(max(color, vec3(0.0)), vec3(1.0 / 2.8));
+                    case CM_TRANSFER_FUNCTION_HLG:
+                        return tfHLG(color);
+                    case CM_TRANSFER_FUNCTION_EXT_SRGB:
+                        return tfExtSRGB(color);
+                    case CM_TRANSFER_FUNCTION_BT1886:
+                        return tfBT1886(color);
+                    case CM_TRANSFER_FUNCTION_ST240:
+                        return tfST240(color);
+                    case CM_TRANSFER_FUNCTION_LOG_100:
+                        return mixb(1.0 + log(color) / log(10.0) / 2.0, vec3(0.0), lessThanEqual(color, vec3(0.01)));
+                    case CM_TRANSFER_FUNCTION_LOG_316:
+                        return mixb(1.0 + log(color) / log(10.0) / 2.5, vec3(0.0), lessThanEqual(color, vec3(sqrt(10.0) / 1000.0)));
+                    case CM_TRANSFER_FUNCTION_XVYCC:
+                        return tfXVYCC(color);
+                    case CM_TRANSFER_FUNCTION_ST428:
+                        return pow(max(color, vec3(0.0)) / ST428_SCALE, vec3(1.0 / ST428_POW));
+                    case CM_TRANSFER_FUNCTION_SRGB:
+                    default:
+                        return tfSRGB(color);
                 }
             }
 
             void main() {
                 vec4 color = texture2D(framebufferTexture, texCoords);
                 gl_FragColor = vec4(
-                    linear(color.r) * displaySDRLevel,
-                    linear(color.g) * displaySDRLevel,
-                    linear(color.b) * displaySDRLevel,
+                    fromLinearRGB(
+                        displayColorMatrix * (toLinearRGB(color.rgb, CM_TRANSFER_FUNCTION_EXT_SRGB) * displaySDRLevel / 80.0),
+                        outTransferFunction
+                    ),
                     color.a
                 );
             }
         )glsl";
 
         try {
-            m_srgb_conversion_shader = new Shader(
+            m_cm_shader = new Shader(
                 nullptr,
                 "srgb_to_linear",
                 vertexShader,
@@ -594,16 +839,15 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             );
         } catch (const std::runtime_error &e) {
             fprintf(stderr, "Error creating sRGB conversion shader: %s\n", e.what());
-            m_srgb_conversion_shader = nullptr;
+            m_cm_shader = nullptr;
         }
 
         uint32_t indices[3 * 2] = { 0, 1, 2, 2, 3, 0 };
         float positions[2 * 4] = { -1.f, -1.f, 1.f, -1.f, 1.f, 1.f, -1.f, 1.f };
 
-        m_srgb_conversion_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
-        m_srgb_conversion_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
-        m_srgb_conversion_shader->set_texture("framebufferTexture", m_srgb_conversion_texture);
-        m_srgb_conversion_shader->set_uniform("displaySDRLevel", m_display_sdr_level);
+        m_cm_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
+        m_cm_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
+        m_cm_shader->set_texture("framebufferTexture", m_cm_texture);
     }
 #endif
 
@@ -715,6 +959,11 @@ void Screen::clear() {
 void Screen::draw_setup() {
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
     glfwMakeContextCurrent(m_glfw_window);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer_handle());
+
+    if (m_cm_render_pass) {
+        m_cm_render_pass->begin();
+    }
 #elif defined(NANOGUI_USE_METAL)
     void *nswin = glfwGetCocoaWindow(m_glfw_window);
     metal_window_set_size(nswin, m_fbsize);
@@ -752,19 +1001,20 @@ void Screen::draw_setup() {
 
 void Screen::draw_teardown() {
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
-    if (m_linear_srgb && m_srgb_conversion_shader && m_srgb_conversion_texture) {
-        // Copy the current framebuffer to texture
-        CHK(glBindTexture(GL_TEXTURE_2D, m_srgb_conversion_texture->texture_handle()));
-        CHK(glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 0, 0, m_fbsize.x(), m_fbsize.y(), 0));
-        CHK(glBindTexture(GL_TEXTURE_2D, 0));
+    if (m_cm_render_pass) {
+        m_cm_render_pass->end();
 
-        // Clear the framebuffer
-        CHK(glClear(GL_COLOR_BUFFER_BIT));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glViewport(0, 0, m_fbsize[0], m_fbsize[1]);
+        CHK(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
 
-        // Render the texture with sRGB to linear conversion
-        m_srgb_conversion_shader->begin();
-        m_srgb_conversion_shader->draw_array(Shader::PrimitiveType::Triangle, 0, 6, true);
-        m_srgb_conversion_shader->end();
+        m_cm_shader->set_uniform("displaySDRLevel", m_display_sdr_level);
+        m_cm_shader->set_uniform("outTransferFunction", m_display_transfer_function);
+        m_cm_shader->set_uniform("displayColorMatrix", m_display_color_matrix);
+
+        m_cm_shader->begin();
+        m_cm_shader->draw_array(Shader::PrimitiveType::Triangle, 0, 6, true);
+        m_cm_shader->end();
     }
 
     glfwSwapBuffers(m_glfw_window);
@@ -1080,8 +1330,16 @@ void Screen::resize_callback_event(int, int) {
 #endif
 
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
-    if (m_linear_srgb && m_srgb_conversion_texture) {
-        m_srgb_conversion_texture->resize(fb_size);
+    if (m_cm_texture) {
+        m_cm_texture->resize(fb_size);
+    }
+
+    if (m_cm_depth_texture) {
+        m_cm_depth_texture->resize(fb_size);
+    }
+
+    if (m_cm_render_pass) {
+        m_cm_render_pass->resize(fb_size);
     }
 #endif
 
@@ -1090,6 +1348,7 @@ void Screen::resize_callback_event(int, int) {
     } catch (const std::exception &e) {
         std::cerr << "Caught exception in event handler: " << e.what() << std::endl;
     }
+
     redraw();
 }
 
@@ -1169,6 +1428,12 @@ bool Screen::tooltip_fade_in_progress() const {
     const Widget *widget = find_widget(m_mouse_pos);
     return widget && !widget->tooltip().empty();
 }
+
+#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+uint32_t Screen::framebuffer_handle() const {
+    return m_cm_render_pass ? m_cm_render_pass->framebuffer_handle() : 0;
+}
+#endif
 
 Texture::PixelFormat Screen::pixel_format() const {
 #if defined(NANOGUI_USE_METAL)
