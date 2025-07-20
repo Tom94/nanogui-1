@@ -274,7 +274,7 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
 #if defined(_WIN32)
     m_needs_cm = m_float_buffer;
 #elif defined(__linux__)
-    m_needs_cm = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
+    m_needs_cm = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && float_buffer;
 #endif
 
     m_display_sdr_level = glfwGetWindowSdrWhiteLevel(m_glfw_window);
@@ -582,25 +582,26 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
 #    if defined(NANOGUI_USE_OPENGL)
         std::string preamble = "#version 110\n";
 #    elif defined(NANOGUI_USE_GLES)
-        std::string preamble = "#version 100\nprecision highp float;\n";
+        std::string preamble = "#version 100\nprecision highp float; precision highp sampler2D;\n";
 #    endif
         auto vertexShader = preamble + R"glsl(
             uniform vec2 pixelSize;
             uniform float ditherSize;
 
             attribute vec2 position;
-            varying vec2 texCoords;
+            varying vec2 imageUv;
             varying vec2 ditherUv;
 
             void main() {
-                texCoords = position * 0.5 + 0.5; // Convert from [-1, 1] to [0, 1]
-                ditherUv = (position / pixelSize + 0.25) / ditherSize;
+                vec2 pos = position * 0.5 + 0.5; // Convert from [-1, 1] to [0, 1]
+                imageUv = pos;
+                ditherUv = (pos / pixelSize + 0.25) / ditherSize;
 
                 gl_Position = vec4(position, 1.0, 1.0);
             }
         )glsl";
         auto fragmentShader = preamble + R"glsl(
-            varying vec2 texCoords;
+            varying vec2 imageUv;
             varying vec2 ditherUv;
 
             uniform sampler2D framebufferTexture;
@@ -775,76 +776,75 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             }
 
             vec3 toLinearRGB(vec3 color, int tf) {
-                switch (tf) {
-                    case CM_TRANSFER_FUNCTION_EXT_LINEAR:
-                        return color;
-                    case CM_TRANSFER_FUNCTION_ST2084_PQ:
-                        return tfInvPQ(color);
-                    case CM_TRANSFER_FUNCTION_GAMMA22:
-                        return pow(max(color, vec3(0.0)), vec3(2.2));
-                    case CM_TRANSFER_FUNCTION_GAMMA28:
-                        return pow(max(color, vec3(0.0)), vec3(2.8));
-                    case CM_TRANSFER_FUNCTION_HLG:
-                        return tfInvHLG(color);
-                    case CM_TRANSFER_FUNCTION_EXT_SRGB:
-                        return tfInvExtSRGB(color);
-                    case CM_TRANSFER_FUNCTION_BT1886:
-                        return tfInvBT1886(color);
-                    case CM_TRANSFER_FUNCTION_ST240:
-                        return tfInvST240(color);
-                    case CM_TRANSFER_FUNCTION_LOG_100:
-                        return mixb(exp((color - 1.0) * 2.0 * log(10.0)), vec3(0.0), lessThanEqual(color, vec3(0.0)));
-                    case CM_TRANSFER_FUNCTION_LOG_316:
-                        return mixb(exp((color - 1.0) * 2.5 * log(10.0)), vec3(0.0), lessThanEqual(color, vec3(0.0)));
-                    case CM_TRANSFER_FUNCTION_XVYCC:
-                        return tfInvXVYCC(color);
-                    case CM_TRANSFER_FUNCTION_ST428:
-                        return pow(max(color, vec3(0.0)), vec3(ST428_POW)) * ST428_SCALE;
-                    case CM_TRANSFER_FUNCTION_SRGB:
-                    default:
-                        return tfInvSRGB(color);
+                if (tf == CM_TRANSFER_FUNCTION_EXT_LINEAR) {
+                    return color;
+                } else if (tf == CM_TRANSFER_FUNCTION_ST2084_PQ) {
+                    return tfInvPQ(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_GAMMA22) {
+                    return pow(max(color, vec3(0.0)), vec3(2.2));
+                } else if (tf == CM_TRANSFER_FUNCTION_GAMMA28) {
+                    return pow(max(color, vec3(0.0)), vec3(2.8));
+                } else if (tf == CM_TRANSFER_FUNCTION_HLG) {
+                    return tfInvHLG(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_EXT_SRGB) {
+                    return tfInvExtSRGB(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_BT1886) {
+                    return tfInvBT1886(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_ST240) {
+                    return tfInvST240(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_LOG_100) {
+                    return mixb(exp((color - 1.0) * 2.0 * log(10.0)), vec3(0.0), lessThanEqual(color, vec3(0.0)));
+                } else if (tf == CM_TRANSFER_FUNCTION_LOG_316) {
+                    return mixb(exp((color - 1.0) * 2.5 * log(10.0)), vec3(0.0), lessThanEqual(color, vec3(0.0)));
+                } else if (tf == CM_TRANSFER_FUNCTION_XVYCC) {
+                    return tfInvXVYCC(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_ST428) {
+                    return pow(max(color, vec3(0.0)), vec3(ST428_POW)) * ST428_SCALE;
+                } else if (tf == CM_TRANSFER_FUNCTION_SRGB) {
+                    return tfInvSRGB(color);
+                } else {
+                    return tfInvSRGB(color);
                 }
             }
 
             vec3 fromLinearRGB(vec3 color, int tf) {
-                switch (tf) {
-                    case CM_TRANSFER_FUNCTION_EXT_LINEAR:
-                        return color;
-                    case CM_TRANSFER_FUNCTION_ST2084_PQ:
-                        return tfPQ(color);
-                    case CM_TRANSFER_FUNCTION_GAMMA22:
-                        return pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
-                    case CM_TRANSFER_FUNCTION_GAMMA28:
-                        return pow(max(color, vec3(0.0)), vec3(1.0 / 2.8));
-                    case CM_TRANSFER_FUNCTION_HLG:
-                        return tfHLG(color);
-                    case CM_TRANSFER_FUNCTION_EXT_SRGB:
-                        return tfExtSRGB(color);
-                    case CM_TRANSFER_FUNCTION_BT1886:
-                        return tfBT1886(color);
-                    case CM_TRANSFER_FUNCTION_ST240:
-                        return tfST240(color);
-                    case CM_TRANSFER_FUNCTION_LOG_100:
-                        return mixb(1.0 + log(color) / log(10.0) / 2.0, vec3(0.0), lessThanEqual(color, vec3(0.01)));
-                    case CM_TRANSFER_FUNCTION_LOG_316:
-                        return mixb(1.0 + log(color) / log(10.0) / 2.5, vec3(0.0), lessThanEqual(color, vec3(sqrt(10.0) / 1000.0)));
-                    case CM_TRANSFER_FUNCTION_XVYCC:
-                        return tfXVYCC(color);
-                    case CM_TRANSFER_FUNCTION_ST428:
-                        return pow(max(color, vec3(0.0)) / ST428_SCALE, vec3(1.0 / ST428_POW));
-                    case CM_TRANSFER_FUNCTION_SRGB:
-                    default:
-                        return tfSRGB(color);
+                if (tf == CM_TRANSFER_FUNCTION_EXT_LINEAR) {
+                    return color;
+                } else if (tf == CM_TRANSFER_FUNCTION_ST2084_PQ) {
+                    return tfPQ(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_GAMMA22) {
+                    return pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
+                } else if (tf == CM_TRANSFER_FUNCTION_GAMMA28) {
+                    return pow(max(color, vec3(0.0)), vec3(1.0 / 2.8));
+                } else if (tf == CM_TRANSFER_FUNCTION_HLG) {
+                    return tfHLG(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_EXT_SRGB) {
+                    return tfExtSRGB(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_BT1886) {
+                    return tfBT1886(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_ST240) {
+                    return tfST240(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_LOG_100) {
+                    return mixb(1.0 + log(color) / log(10.0) / 2.0, vec3(0.0), lessThanEqual(color, vec3(0.01)));
+                } else if (tf == CM_TRANSFER_FUNCTION_LOG_316) {
+                    return mixb(1.0 + log(color) / log(10.0) / 2.5, vec3(0.0), lessThanEqual(color, vec3(sqrt(10.0) / 1000.0)));
+                } else if (tf == CM_TRANSFER_FUNCTION_XVYCC) {
+                    return tfXVYCC(color);
+                } else if (tf == CM_TRANSFER_FUNCTION_ST428) {
+                    return pow(max(color, vec3(0.0)) / ST428_SCALE, vec3(1.0 / ST428_POW));
+                } else if (tf == CM_TRANSFER_FUNCTION_SRGB) {
+                    return tfSRGB(color);
+                } else {
+                    return tfSRGB(color);
                 }
             }
 
-            vec4 dither(vec4 color) {
-                color.rgb += texture2D(ditherMatrix, fract(ditherUv)).r;
-                return color;
+            vec3 dither(vec3 color) {
+                return color + texture2D(ditherMatrix, fract(ditherUv)).r;
             }
 
             void main() {
-                vec4 color = texture2D(framebufferTexture, texCoords);
+                vec4 color = texture2D(framebufferTexture, imageUv);
                 color = vec4(
                     fromLinearRGB(
                         displayColorMatrix * (toLinearRGB(color.rgb, CM_TRANSFER_FUNCTION_EXT_SRGB) * displaySDRLevel / 80.0),
@@ -853,7 +853,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
                     color.a
                 );
 
-                color = dither(color);
+                color.rgb = dither(color.rgb);
                 if (clipToLdr) {
                     color = clamp(color, vec4(0.0), vec4(1.0));
                 }
@@ -879,15 +879,10 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
 
         m_cm_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
         m_cm_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
-        m_cm_shader->set_texture("framebufferTexture", m_cm_texture);
-
-        m_cm_shader->set_uniform("clipToLdr", !m_float_buffer);
 
         const float ditherScale = m_float_buffer ? 0.0f : (1.0f / (1u << m_bits_per_sample));
-        m_cm_dither_matrix->upload((uint8_t*)nanogui::ditherMatrix(ditherScale).data());
-
-        m_cm_shader->set_uniform("ditherSize", static_cast<float>(DITHER_MATRIX_SIZE));
-        m_cm_shader->set_texture("ditherMatrix", m_cm_dither_matrix);
+        auto ditherMatrix = nanogui::ditherMatrix(ditherScale);
+        m_cm_dither_matrix->upload((uint8_t*)ditherMatrix.data());
     }
 #endif
 
@@ -1052,6 +1047,12 @@ void Screen::draw_teardown() {
         m_cm_shader->set_uniform("outTransferFunction", m_display_transfer_function);
         m_cm_shader->set_uniform("displayColorMatrix", m_display_color_matrix);
         m_cm_shader->set_uniform("pixelSize", Vector2f(1.0f / m_fbsize[0], 1.0f / m_fbsize[1]));
+
+        m_cm_shader->set_texture("framebufferTexture", m_cm_texture);
+        m_cm_shader->set_uniform("clipToLdr", !m_float_buffer);
+
+        m_cm_shader->set_uniform("ditherSize", static_cast<float>(DITHER_MATRIX_SIZE));
+        m_cm_shader->set_texture("ditherMatrix", m_cm_dither_matrix);
 
         m_cm_shader->begin();
         m_cm_shader->draw_array(Shader::PrimitiveType::Triangle, 0, 6, true);
