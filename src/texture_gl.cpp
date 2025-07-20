@@ -421,7 +421,7 @@ static void gl_map_texture_format(Texture::PixelFormat &pixel_format,
                 case ComponentFormat::Int32:
                 case ComponentFormat::UInt32:
                     component_format = ComponentFormat::UInt32;
-                    internal_format_gl = GL_DEPTH_COMPONENT24;
+                    internal_format_gl = GL_DEPTH24_STENCIL8;
                     break;
 
                 case ComponentFormat::Float16:
@@ -443,7 +443,9 @@ static void gl_map_texture_format(Texture::PixelFormat &pixel_format,
         case ComponentFormat::Int8:    component_format_gl = GL_BYTE;           break;
         case ComponentFormat::UInt8:   component_format_gl = GL_UNSIGNED_BYTE;  break;
         case ComponentFormat::Int16:   component_format_gl = GL_SHORT;          break;
+        case ComponentFormat::Int32:   component_format_gl = GL_INT;            break;
         case ComponentFormat::UInt16:  component_format_gl = GL_UNSIGNED_SHORT; break;
+        case ComponentFormat::UInt32:  component_format_gl = GL_UNSIGNED_INT;   break;
         case ComponentFormat::Float16: component_format_gl = GL_HALF_FLOAT;     break;
         case ComponentFormat::Float32: component_format_gl = GL_FLOAT;          break;
         default:
