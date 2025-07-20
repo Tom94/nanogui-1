@@ -260,14 +260,13 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
 #endif
 
 #if defined(NANOGUI_USE_OPENGL)
-    if (m_float_buffer) {
-      GLboolean float_mode;
-      CHK(glGetBooleanv(GL_RGBA_FLOAT_MODE, &float_mode));
-      if (!float_mode) {
+    m_bits_per_sample = glfwGetWindowAttrib(m_glfw_window, GLFW_RED_BITS);
+    if (m_float_buffer && m_bits_per_sample < 16) {
         fprintf(stderr, "Could not allocate floating point framebuffer.\n");
         m_float_buffer = false;
-      }
     }
+#else
+    m_bits_per_sample = m_float_buffer ? 16 : 8;
 #endif
 
     // If we managed to allocate a floating point framebuffer and we're on Windows *or* if we are on Wayland, regardless of whether we have
@@ -571,25 +570,46 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         // Disable depth testing. We've only got a depth buffer in order to have a stencil buffer.
         m_cm_render_pass->set_depth_test(RenderPass::DepthTest::Always, true);
 
+        m_cm_dither_matrix = new Texture{
+            Texture::PixelFormat::R,
+            Texture::ComponentFormat::Float32,
+            Vector2i{nanogui::DITHER_MATRIX_SIZE},
+            Texture::InterpolationMode::Nearest,
+            Texture::InterpolationMode::Nearest,
+            Texture::WrapMode::Repeat,
+        };
+
 #    if defined(NANOGUI_USE_OPENGL)
         std::string preamble = "#version 110\n";
 #    elif defined(NANOGUI_USE_GLES)
         std::string preamble = "#version 100\nprecision highp float;\n";
 #    endif
         auto vertexShader = preamble + R"glsl(
+            uniform vec2 pixelSize;
+            uniform float ditherSize;
+
             attribute vec2 position;
             varying vec2 texCoords;
+            varying vec2 ditherUv;
+
             void main() {
                 texCoords = position * 0.5 + 0.5; // Convert from [-1, 1] to [0, 1]
+                ditherUv = (position / pixelSize + 0.25) / ditherSize;
+
                 gl_Position = vec4(position, 1.0, 1.0);
             }
         )glsl";
         auto fragmentShader = preamble + R"glsl(
             varying vec2 texCoords;
+            varying vec2 ditherUv;
+
             uniform sampler2D framebufferTexture;
+            uniform sampler2D ditherMatrix;
+
             uniform float displaySDRLevel;
             uniform int outTransferFunction;
             uniform mat3 displayColorMatrix;
+            uniform bool clipToLdr;
 
             //enum eTransferFunction
             #define CM_TRANSFER_FUNCTION_BT1886     1
@@ -657,9 +677,9 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             // The primary source for these transfer functions is https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.1361-0-199802-W!!PDF-E.pdf
             // Outputs are assumed to have 1 == SDR White which is different for each transfer function.
             vec3 tfInvPQ(vec3 color) {
-                vec3 E = pow(clamp(color.rgb, vec3(0.0), vec3(1.0)), vec3(PQ_INV_M2));
+                vec3 E = pow(max(color.rgb, vec3(0.0)), vec3(PQ_INV_M2));
                 return pow(
-                    (max(E - PQ_C1, vec3(0.0))) / (PQ_C2 - PQ_C3 * E),
+                    (max(E - PQ_C1, vec3(0.0))) / max(PQ_C2 - PQ_C3 * E, vec3(1e-5)),
                     vec3(PQ_INV_M1)
                 ) * 10000.0 / 203.0;
             }
@@ -709,9 +729,9 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             // Inputs are assumed to have 1 == 80 nits!
             vec3 tfPQ(vec3 color) {
                 color *= 80.0 / 10000.0;
-                vec3 E = pow(clamp(color.rgb, vec3(0.0), vec3(1.0)), vec3(PQ_M1));
+                vec3 E = pow(max(color.rgb, vec3(0.0)), vec3(PQ_M1));
                 return pow(
-                    (vec3(PQ_C1) + PQ_C2 * E) / (vec3(1.0) + PQ_C3 * E),
+                    (vec3(PQ_C1) + PQ_C2 * E) / max(vec3(1.0) + PQ_C3 * E, vec3(1e-5)),
                     vec3(PQ_M2)
                 );
             }
@@ -818,15 +838,27 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
                 }
             }
 
+            vec4 dither(vec4 color) {
+                color.rgb += texture2D(ditherMatrix, fract(ditherUv)).r;
+                return color;
+            }
+
             void main() {
                 vec4 color = texture2D(framebufferTexture, texCoords);
-                gl_FragColor = vec4(
+                color = vec4(
                     fromLinearRGB(
                         displayColorMatrix * (toLinearRGB(color.rgb, CM_TRANSFER_FUNCTION_EXT_SRGB) * displaySDRLevel / 80.0),
                         outTransferFunction
                     ),
                     color.a
                 );
+
+                color = dither(color);
+                if (clipToLdr) {
+                    color = clamp(color, vec4(0.0), vec4(1.0));
+                }
+
+                gl_FragColor = color;
             }
         )glsl";
 
@@ -848,6 +880,14 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         m_cm_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
         m_cm_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
         m_cm_shader->set_texture("framebufferTexture", m_cm_texture);
+
+        m_cm_shader->set_uniform("clipToLdr", !m_float_buffer);
+
+        const float ditherScale = m_float_buffer ? 0.0f : (1.0f / (1u << m_bits_per_sample));
+        m_cm_dither_matrix->upload((uint8_t*)nanogui::ditherMatrix(ditherScale).data());
+
+        m_cm_shader->set_uniform("ditherSize", static_cast<float>(DITHER_MATRIX_SIZE));
+        m_cm_shader->set_texture("ditherMatrix", m_cm_dither_matrix);
     }
 #endif
 
@@ -1011,6 +1051,7 @@ void Screen::draw_teardown() {
         m_cm_shader->set_uniform("displaySDRLevel", m_display_sdr_level);
         m_cm_shader->set_uniform("outTransferFunction", m_display_transfer_function);
         m_cm_shader->set_uniform("displayColorMatrix", m_display_color_matrix);
+        m_cm_shader->set_uniform("pixelSize", Vector2f(1.0f / m_fbsize[0], 1.0f / m_fbsize[1]));
 
         m_cm_shader->begin();
         m_cm_shader->draw_array(Shader::PrimitiveType::Triangle, 0, 6, true);

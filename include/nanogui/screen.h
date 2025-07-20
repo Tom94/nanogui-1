@@ -216,6 +216,9 @@ public:
     /// Does the floatbuffer use linear sRGB instead of regular sRGB?
     bool needs_cm() const { return m_needs_cm; }
 
+    /// How many bits per sample does the framebuffer use?
+    uint32_t bits_per_sample() const { return m_bits_per_sample; }
+
 #if defined(NANOGUI_USE_METAL)
     /// Return the associated CAMetalLayer object
     void *metal_layer() const;
@@ -317,6 +320,7 @@ protected:
     bool m_depth_buffer;
     bool m_stencil_buffer;
     bool m_float_buffer;
+    uint32_t m_bits_per_sample;
     bool m_needs_cm = false;
     float m_display_sdr_level = 80.0f;
     int m_display_primaries = 1; // sRGB
@@ -328,6 +332,7 @@ protected:
     ref<RenderPass> m_cm_render_pass;
     ref<Texture> m_cm_texture;
     ref<Texture> m_cm_depth_texture;
+    ref<Texture> m_cm_dither_matrix;
     ref<Shader> m_cm_shader;
 #endif
 #if defined(NANOGUI_USE_METAL)

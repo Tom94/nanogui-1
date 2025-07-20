@@ -469,5 +469,25 @@ void Object::dec_ref(bool dealloc) const noexcept {
 
 Object::~Object() { }
 
+dither_matrix_t ditherMatrix(float scale) {
+    // 8x8 Bayer dithering matrix scaled to [-0.5f, 0.5f] / 255
+    dither_matrix_t thresholdMatrix = {
+        {0, 32, 8, 40, 2, 34, 10, 42,
+         48, 16, 56, 24, 50, 18, 58, 26,
+         12, 44, 4, 36, 14, 46, 6, 38,
+         60, 28, 52, 20, 62, 30, 54, 22,
+         3, 35, 11, 43, 1, 33, 9, 41,
+         51, 19, 59, 27, 49, 17, 57, 25,
+         15, 47, 7, 39, 13, 45, 5, 37,
+         63, 31, 55, 23, 61, 29, 53, 21}
+    };
+
+    for (size_t i = 0; i < DITHER_MATRIX_SIZE * DITHER_MATRIX_SIZE; ++i) {
+        thresholdMatrix[i] = (thresholdMatrix[i] / DITHER_MATRIX_SIZE / DITHER_MATRIX_SIZE - 0.5f) * scale;
+    }
+
+    return thresholdMatrix;
+}
+
 NAMESPACE_END(nanogui)
 
