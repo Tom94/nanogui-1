@@ -224,7 +224,11 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
 #if defined(GLFW_FLOATBUFFER)
             glfwWindowHint(GLFW_FLOATBUFFER, GL_FALSE);
 #endif
-            fprintf(stderr, "Could not allocate floating point framebuffer, retrying without..\n");
+
+            glfwWindowHint(GLFW_RED_BITS, 10);
+            glfwWindowHint(GLFW_GREEN_BITS, 10);
+            glfwWindowHint(GLFW_BLUE_BITS, 10);
+            glfwWindowHint(GLFW_ALPHA_BITS, 2);
         } else {
             break;
         }
@@ -259,7 +263,7 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     }
 #endif
 
-#if defined(NANOGUI_USE_OPENGL)
+#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
     m_bits_per_sample = glfwGetWindowAttrib(m_glfw_window, GLFW_RED_BITS);
     if (m_float_buffer && m_bits_per_sample < 16) {
         fprintf(stderr, "Could not allocate floating point framebuffer.\n");
@@ -269,17 +273,13 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     m_bits_per_sample = m_float_buffer ? 16 : 8;
 #endif
 
-    // If we managed to allocate a floating point framebuffer and we're on Windows *or* if we are on Wayland, regardless of whether we have
-    // a floating point framebuffer or not, we'll have to perform color management to ensure that colors are displayed correctly.
-#if defined(_WIN32)
-    m_needs_cm = m_float_buffer;
-#elif defined(__linux__)
-    m_needs_cm = glfwGetPlatform() == GLFW_PLATFORM_WAYLAND && float_buffer;
-#endif
-
     m_display_sdr_level = glfwGetWindowSdrWhiteLevel(m_glfw_window);
     m_display_transfer_function = glfwGetWindowTransfer(m_glfw_window);
     m_display_primaries = glfwGetWindowPrimaries(m_glfw_window);
+
+    // If we aren't displaying standard sRGB, we need to apply color management in a post-processing step.
+    m_applies_color_management = m_display_primaries != 1 || m_display_transfer_function != 10 || m_display_sdr_level != 80.0f;
+
     // This matrix should be set according to the display primaries, but nanogui currently doesn't have this functionality.
     // The matrix is settable via the set_display_color_matrix() method which color-accurate applications should use.
     m_display_color_matrix = Matrix3f(1.0f);
@@ -534,7 +534,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
 
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
     // Initialize color management resources if needed
-    if (m_needs_cm) {
+    if (m_applies_color_management) {
         m_cm_texture = new Texture(
             pixel_format(),
             Texture::ComponentFormat::Float16,
@@ -864,12 +864,12 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         try {
             m_cm_shader = new Shader(
                 nullptr,
-                "srgb_to_linear",
+                "color_management",
                 vertexShader,
                 fragmentShader
             );
         } catch (const std::runtime_error &e) {
-            fprintf(stderr, "Error creating sRGB conversion shader: %s\n", e.what());
+            fprintf(stderr, "Error creating color management shader: %s\n", e.what());
             m_cm_shader = nullptr;
         }
 

@@ -213,8 +213,8 @@ public:
     /// Does the framebuffer use a floating point representation
     bool has_float_buffer() const { return m_float_buffer; }
 
-    /// Does the floatbuffer use linear sRGB instead of regular sRGB?
-    bool needs_cm() const { return m_needs_cm; }
+    /// Does the screen apply color management as a post processing shader?
+    bool applies_color_management() const { return m_applies_color_management; }
 
     /// How many bits per sample does the framebuffer use?
     uint32_t bits_per_sample() const { return m_bits_per_sample; }
@@ -321,7 +321,7 @@ protected:
     bool m_stencil_buffer;
     bool m_float_buffer;
     uint32_t m_bits_per_sample;
-    bool m_needs_cm = false;
+    bool m_applies_color_management = false;
     float m_display_sdr_level = 80.0f;
     int m_display_primaries = 1; // sRGB
     int m_display_transfer_function = 10; // ext sRGB
