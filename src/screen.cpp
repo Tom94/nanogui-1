@@ -19,6 +19,8 @@
 #include <nanogui/metal.h>
 #include <nanogui/renderpass.h>
 #include <nanogui/shader.h>
+
+#include <cstdlib>
 #include <map>
 #include <iostream>
 
@@ -277,7 +279,11 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     m_display_transfer_function = glfwGetWindowTransfer(m_glfw_window);
     m_display_primaries = glfwGetWindowPrimaries(m_glfw_window);
 
-    // If we aren't displaying standard sRGB, we need to apply color management in a post-processing step.
+    const char* env_sdr_white = std::getenv("TEV_CM_SDR_WHITE_LEVEL");
+    if (env_sdr_white != nullptr) {
+        m_display_sdr_level = std::stof(env_sdr_white);
+    }
+
     m_applies_color_management = m_display_primaries != 1 || m_display_transfer_function != 10 || m_display_sdr_level != 80.0f;
 
     // This matrix should be set according to the display primaries, but nanogui currently doesn't have this functionality.
