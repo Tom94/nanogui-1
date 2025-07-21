@@ -585,8 +585,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
         std::string preamble = "#version 100\nprecision highp float; precision highp sampler2D;\n";
 #    endif
         auto vertexShader = preamble + R"glsl(
-            uniform vec2 pixelSize;
-            uniform float ditherSize;
+            uniform vec2 ditherScale;
 
             attribute vec2 position;
             varying vec2 imageUv;
@@ -595,7 +594,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
             void main() {
                 vec2 pos = position * 0.5 + 0.5; // Convert from [-1, 1] to [0, 1]
                 imageUv = pos;
-                ditherUv = (pos / pixelSize + 0.25) / ditherSize;
+                ditherUv = pos * ditherScale;
 
                 gl_Position = vec4(position, 1.0, 1.0);
             }
@@ -1046,12 +1045,11 @@ void Screen::draw_teardown() {
         m_cm_shader->set_uniform("displaySDRLevel", m_display_sdr_level);
         m_cm_shader->set_uniform("outTransferFunction", m_display_transfer_function);
         m_cm_shader->set_uniform("displayColorMatrix", m_display_color_matrix);
-        m_cm_shader->set_uniform("pixelSize", Vector2f(1.0f / m_fbsize[0], 1.0f / m_fbsize[1]));
 
         m_cm_shader->set_texture("framebufferTexture", m_cm_texture);
         m_cm_shader->set_uniform("clipToLdr", !m_float_buffer);
 
-        m_cm_shader->set_uniform("ditherSize", static_cast<float>(DITHER_MATRIX_SIZE));
+        m_cm_shader->set_uniform("ditherScale", (1.0f / DITHER_MATRIX_SIZE) * Vector2f(m_fbsize[0], m_fbsize[1]));
         m_cm_shader->set_texture("ditherMatrix", m_cm_dither_matrix);
 
         m_cm_shader->begin();
