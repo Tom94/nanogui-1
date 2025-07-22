@@ -214,7 +214,7 @@ public:
     bool has_float_buffer() const { return m_float_buffer; }
 
     /// Does the screen apply color management as a post processing shader?
-    bool applies_color_management() const { return m_applies_color_management; }
+    bool applies_color_management() const { return m_wants_color_management && m_cm_render_pass && m_cm_shader && m_cm_texture; }
 
     /// How many bits per sample does the framebuffer use?
     uint32_t bits_per_sample() const { return m_bits_per_sample; }
@@ -287,18 +287,6 @@ public:
     uint32_t framebuffer_handle() const;
 #endif
 
-    int display_primaries() const {
-        return m_display_primaries;
-    }
-
-    int display_transfer_function() const {
-        return m_display_transfer_function;
-    }
-
-    void set_display_color_matrix(const Matrix3f &matrix) {
-        m_display_color_matrix = matrix;
-    }
-
 protected:
     GLFWwindow *m_glfw_window = nullptr;
     NVGcontext *m_nvg_context = nullptr;
@@ -321,20 +309,16 @@ protected:
     bool m_stencil_buffer;
     bool m_float_buffer;
     uint32_t m_bits_per_sample;
-    bool m_applies_color_management = false;
+    bool m_wants_color_management = false;
     float m_display_sdr_level = 80.0f;
     int m_display_primaries = 1; // sRGB
     int m_display_transfer_function = 10; // ext sRGB
-    Matrix3f m_display_color_matrix;
     bool m_redraw;
     std::function<void(Vector2i)> m_resize_callback;
-#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
     ref<RenderPass> m_cm_render_pass;
     ref<Texture> m_cm_texture;
     ref<Texture> m_cm_depth_texture;
-    ref<Texture> m_cm_dither_matrix;
     ref<Shader> m_cm_shader;
-#endif
 #if defined(NANOGUI_USE_METAL)
     void *m_metal_texture = nullptr;
     void *m_metal_drawable = nullptr;
