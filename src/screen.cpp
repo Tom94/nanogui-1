@@ -543,7 +543,7 @@ void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
     if (m_applies_color_management) {
         m_cm_texture = new Texture(
             pixel_format(),
-            Texture::ComponentFormat::Float16,
+            Texture::ComponentFormat::Float32,
             m_fbsize,
             Texture::InterpolationMode::Nearest,
             Texture::InterpolationMode::Nearest,
