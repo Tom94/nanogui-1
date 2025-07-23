@@ -317,18 +317,18 @@ file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/resources")
 
 # Precompile .metal shaders to .metallib files
 foreach(fname_in IN LISTS resources)
-  if (NANOGUI_BACKEND STREQUAL "Metal" AND fname_in MATCHES "\\.metal")
-    get_filename_component(fname_out ${fname_in} NAME)
-    set(fname_out "${CMAKE_CURRENT_BINARY_DIR}/resources/${fname_out}lib")
-    add_custom_command(
-        OUTPUT ${fname_out}
-        DEPENDS ${fname_in}
-        COMMAND xcrun -sdk macosx metal -std=osx-metal2.0 -O3 "${fname_in}" -o "${fname_out}"
-        VERBATIM
-    )
-  else()
+  # if (NANOGUI_BACKEND STREQUAL "Metal" AND fname_in MATCHES "\\.metal")
+  #   get_filename_component(fname_out ${fname_in} NAME)
+  #   set(fname_out "${CMAKE_CURRENT_BINARY_DIR}/resources/${fname_out}lib")
+  #   add_custom_command(
+  #       OUTPUT ${fname_out}
+  #       DEPENDS ${fname_in}
+  #       COMMAND xcrun -sdk macosx metal -std=osx-metal2.0 -O3 "${fname_in}" -o "${fname_out}"
+  #       VERBATIM
+  #   )
+  # else()
     set(fname_out "${fname_in}")
-  endif()
+  # endif()
   list(APPEND resources_processed ${fname_out})
 endforeach()
 

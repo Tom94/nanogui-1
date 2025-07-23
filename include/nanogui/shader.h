@@ -251,7 +251,7 @@ protected:
 #elif defined(NANOGUI_USE_GLES)
 #  define NANOGUI_SHADER(name) NANOGUI_RESOURCE_STRING(name##_gles)
 #elif defined(NANOGUI_USE_METAL)
-#  define NANOGUI_SHADER(name) NANOGUI_RESOURCE_STRING(name##_metallib)
+#  define NANOGUI_SHADER(name) NANOGUI_RESOURCE_STRING(name##_metal)
 #endif
 
 
