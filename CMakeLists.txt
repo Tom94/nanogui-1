@@ -92,15 +92,12 @@ set(NANOGUI_NATIVE_FLAGS ${NANOGUI_NATIVE_FLAGS_DEFAULT} CACHE STRING
     "Compilation flags used to target the host processor architecture.")
 
 if (NOT NANOGUI_BACKEND)
-  if (CMAKE_SYSTEM_PROCESSOR MATCHES "armv7" OR
-      CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR
-      CMAKE_CXX_COMPILER MATCHES "/em\\+\\+(-[a-zA-Z0-9.])?$")
+  if (CMAKE_CXX_COMPILER MATCHES "/em\\+\\+(-[a-zA-Z0-9.])?$")
     set(NANOGUI_BACKEND_DEFAULT "GLES 2")
   elseif (APPLE)
     set(NANOGUI_BACKEND_DEFAULT "Metal")
   elseif (CMAKE_SYSTEM_NAME MATCHES "Linux" OR
           CMAKE_SYSTEM_NAME MATCHES "BSD")
-    # set(NANOGUI_BACKEND_DEFAULT "GLES 3")
     set(NANOGUI_BACKEND_DEFAULT "OpenGL")
   else()
     set(NANOGUI_BACKEND_DEFAULT "OpenGL")
