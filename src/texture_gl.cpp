@@ -420,9 +420,11 @@ static void gl_map_texture_format(Texture::PixelFormat &pixel_format,
                 case ComponentFormat::UInt16:
                 case ComponentFormat::Int32:
                 case ComponentFormat::UInt32:
+#if defined(GL_DEPTH24_STENCIL8)
                     component_format = ComponentFormat::UInt32;
                     internal_format_gl = GL_DEPTH24_STENCIL8;
                     break;
+#endif
 
                 case ComponentFormat::Float16:
                 case ComponentFormat::Float32:
