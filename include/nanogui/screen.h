@@ -17,6 +17,8 @@
 #include <nanogui/widget.h>
 #include <nanogui/texture.h>
 
+#include <optional>
+
 NAMESPACE_BEGIN(nanogui)
 
 class Texture;
@@ -310,7 +312,7 @@ protected:
     bool m_float_buffer;
     uint32_t m_bits_per_sample;
     bool m_wants_color_management = false;
-    float m_display_sdr_level = 80.0f;
+    std::optional<float> m_display_sdr_level_override = std::nullopt;
     int m_display_primaries = 1; // sRGB
     int m_display_transfer_function = 10; // ext sRGB
     bool m_redraw;

@@ -275,16 +275,21 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     m_bits_per_sample = m_float_buffer ? 16 : 8;
 #endif
 
-    m_display_sdr_level = glfwGetWindowSdrWhiteLevel(m_glfw_window);
+    float display_sdr_white_level = glfwGetWindowSdrWhiteLevel(m_glfw_window);
     m_display_transfer_function = glfwGetWindowTransfer(m_glfw_window);
     m_display_primaries = glfwGetWindowPrimaries(m_glfw_window);
 
+#ifdef _WIN32
+    // On Windows, it is expensive to query the display SDR level, so we do it once on startup and cache the value.
+    m_display_sdr_level_override = display_sdr_white_level;
+#endif
+
     const char* env_sdr_white = std::getenv("TEV_CM_SDR_WHITE_LEVEL");
     if (env_sdr_white != nullptr) {
-        m_display_sdr_level = std::stof(env_sdr_white);
+        m_display_sdr_level_override = display_sdr_white_level = std::stof(env_sdr_white);
     }
 
-    m_wants_color_management = m_display_primaries != 1 || m_display_transfer_function != 10 || m_display_sdr_level != 80.0f;
+    m_wants_color_management = m_display_primaries != 1 || m_display_transfer_function != 10 || display_sdr_white_level != 80.0f;
 
     glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
 
