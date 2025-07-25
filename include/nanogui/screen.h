@@ -312,9 +312,7 @@ protected:
     bool m_float_buffer;
     uint32_t m_bits_per_sample;
     bool m_wants_color_management = false;
-    std::optional<float> m_display_sdr_level_override = std::nullopt;
-    int m_display_primaries = 1; // sRGB
-    int m_display_transfer_function = 10; // ext sRGB
+    std::optional<float> m_display_sdr_white_level_override = std::nullopt;
     bool m_redraw;
     std::function<void(Vector2i)> m_resize_callback;
     ref<RenderPass> m_cm_render_pass;
