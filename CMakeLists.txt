@@ -399,6 +399,7 @@ add_library(nanogui ${NANOGUI_LIBRARY_TYPE}
   include/nanogui/graph.h src/graph.cpp
   include/nanogui/tabwidget.h src/tabwidget.cpp
   include/nanogui/canvas.h src/canvas.cpp
+  include/nanogui/chroma.h src/chroma.cpp
   include/nanogui/texture.h src/texture.cpp
   include/nanogui/shader.h src/shader.cpp
   include/nanogui/imageview.h src/imageview.cpp

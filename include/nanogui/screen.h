@@ -319,6 +319,7 @@ protected:
     ref<Texture> m_cm_texture;
     ref<Texture> m_cm_depth_texture;
     ref<Shader> m_cm_shader;
+    ref<Texture> m_dither_matrix;
 #if defined(NANOGUI_USE_METAL)
     void *m_metal_texture = nullptr;
     void *m_metal_drawable = nullptr;
