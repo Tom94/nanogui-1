@@ -285,7 +285,7 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
     m_display_sdr_white_level_override = display_sdr_white_level;
 #endif
 
-    const char* env_sdr_white = std::getenv("TEV_CM_SDR_WHITE_LEVEL");
+    const char* env_sdr_white = std::getenv("NANOGUI_CM_SDR_WHITE_LEVEL");
     if (env_sdr_white != nullptr) {
         m_display_sdr_white_level_override = display_sdr_white_level = std::stof(env_sdr_white);
     }
@@ -460,9 +460,124 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
         );
     }
 #endif
+}
+
+void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
+    m_glfw_window = window;
+    m_shutdown_glfw = shutdown_glfw;
+    glfwGetWindowSize(m_glfw_window, &m_size[0], &m_size[1]);
+    glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
+
+    m_pixel_ratio = get_pixel_ratio(window);
+
+#if defined(EMSCRIPTEN)
+    double w, h;
+    emscripten_get_element_css_size("#canvas", &w, &h);
+    double ratio = emscripten_get_device_pixel_ratio(),
+           w2 = w * ratio, h2 = h * ratio;
+
+    if (w != m_size[0] || h != m_size[1]) {
+        /* The canvas element is configured as width/height: auto, expand to
+           the available space instead of using the specified window resolution */
+        nanogui_emscripten_resize_callback(0, nullptr, nullptr);
+        emscripten_set_resize_callback(nullptr, nullptr, false,
+                                       nanogui_emscripten_resize_callback);
+    } else if (w != w2 || h != h2) {
+        /* Configure for rendering on a high-DPI display */
+        emscripten_set_canvas_element_size("#canvas", (int) w2, (int) h2);
+        emscripten_set_element_css_size("#canvas", w, h);
+    }
+    m_fbsize = Vector2i((int) w2, (int) h2);
+    m_size = Vector2i((int) w, (int) h);
+#elif defined(_WIN32) || defined(__linux__)
+    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND && m_pixel_ratio != 1 && !m_fullscreen)
+        glfwSetWindowSize(window, m_size.x() * m_pixel_ratio,
+                                  m_size.y() * m_pixel_ratio);
+#endif
+
+#if defined(NANOGUI_GLAD)
+    if (!glad_initialized) {
+        glad_initialized = true;
+        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+            throw std::runtime_error("Could not initialize GLAD!");
+        glGetError(); // pull and ignore unhandled errors like GL_INVALID_ENUM
+    }
+#endif
+
+    int flags = NVG_ANTIALIAS;
+    if (m_stencil_buffer)
+       flags |= NVG_STENCIL_STROKES;
+#if !defined(NDEBUG)
+    flags |= NVG_DEBUG;
+#endif
+
+#if defined(NANOGUI_USE_OPENGL)
+    m_nvg_context = nvgCreateGL3(flags);
+#elif defined(NANOGUI_USE_GLES)
+    m_nvg_context = nvgCreateGLES2(flags);
+#elif defined(NANOGUI_USE_METAL)
+    void *nswin = glfwGetCocoaWindow(window);
+    metal_window_init(nswin, m_float_buffer);
+    metal_window_set_size(nswin, m_fbsize);
+    m_nvg_context = nvgCreateMTL(metal_layer(),
+                                 metal_command_queue(),
+                                 flags | NVG_TRIPLE_BUFFER);
+#endif
+
+    if (!m_nvg_context)
+        throw std::runtime_error("Could not initialize NanoVG!");
+
+    m_visible = glfwGetWindowAttrib(window, GLFW_VISIBLE) != 0;
+    set_theme(new Theme(m_nvg_context));
+    m_mouse_pos = Vector2i(0);
+    m_mouse_state = m_modifiers = 0;
+    m_drag_active = false;
+    m_last_interaction = glfwGetTime();
+    m_process_events = true;
+    m_redraw = true;
+    __nanogui_screens[m_glfw_window] = this;
+
+    for (size_t i = 0; i < (size_t) Cursor::CursorCount; ++i)
+        m_cursors[i] = glfwCreateStandardCursor(GLFW_ARROW_CURSOR + (int) i);
 
 #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
+    // Initialize color management resources if needed
     if (m_wants_color_management) {
+        m_cm_texture = new Texture(
+            pixel_format(),
+            Texture::ComponentFormat::Float32,
+            m_fbsize,
+            Texture::InterpolationMode::Nearest,
+            Texture::InterpolationMode::Nearest,
+            Texture::WrapMode::ClampToEdge,
+            1,
+            Texture::TextureFlags::ShaderRead | Texture::TextureFlags::RenderTarget
+        );
+
+        if (m_stencil_buffer || m_depth_buffer) {
+            m_cm_depth_texture = new Texture(
+                m_stencil_buffer ? Texture::PixelFormat::DepthStencil : Texture::PixelFormat::Depth,
+                Texture::ComponentFormat::UInt32,
+                m_fbsize,
+                Texture::InterpolationMode::Nearest,
+                Texture::InterpolationMode::Nearest,
+                Texture::WrapMode::ClampToEdge,
+                1,
+                Texture::TextureFlags::RenderTarget
+            );
+        }
+
+        m_cm_render_pass = new RenderPass(
+            {m_cm_texture},
+            m_depth_buffer ? m_cm_depth_texture : nullptr,
+            m_stencil_buffer ? m_cm_depth_texture : nullptr,
+            nullptr,
+            true
+        );
+
+        // Disable depth testing. We've only got a depth buffer in order to have a stencil buffer.
+        m_cm_render_pass->set_depth_test(RenderPass::DepthTest::Always, true);
+
         m_dither_matrix = new Texture{
             Texture::PixelFormat::R,
             Texture::ComponentFormat::Float32,
@@ -472,9 +587,9 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
             Texture::WrapMode::Repeat,
         };
 
-        const float ditherScale = has_float_buffer() ? 0.0f : (1.0f / (1u << bits_per_sample()));
-        auto ditherMatrix = nanogui::ditherMatrix(ditherScale);
-        m_dither_matrix->upload((uint8_t*)ditherMatrix.data());
+        const float dither_scale = has_float_buffer() ? 0.0f : (1.0f / (1u << bits_per_sample()));
+        auto dither_matrix = nanogui::ditherMatrix(dither_scale);
+        m_dither_matrix->upload((uint8_t*)dither_matrix.data());
 
 #    if defined(NANOGUI_USE_OPENGL)
         std::string preamble = "#version 110\n";
@@ -747,9 +862,9 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
             void main() {
                 vec4 color = texture2D(framebufferTexture, imageUv);
 
-                // tev handles colors in linear sRGB with a scale that assumes SDR white corresponds to a value of 1. Hence, to convert to
-                // absolute nits in the display's color space, we need to multiply by the SDR white level of the display, as well as its
-                // color transform.
+                // nanogui uses colors in extended sRGB with a scale that assumes SDR white corresponds to a value of 1. Hence, to convert to
+                // absolute nits in the display's color space, we need to undo the extended sRGB transfer function, multiply by the SDR white
+                // level of the display, apply the display's color matrix, and finally apply the display's transfer function.
                 vec3 nits = displayColorMatrix * (displaySdrWhiteLevel * toLinearRGB(color.rgb, CM_TRANSFER_FUNCTION_EXT_SRGB));
 
                 // Some displays perform strange tonemapping when provided with values outside of their luminance range. Make sure we don't
@@ -758,7 +873,10 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
                     nits = clamp(nits, vec3(minLuminance), vec3(maxLuminance));
                 }
 
+                // On Linux, some drivers only let us have an 8-bit framebuffer. When dealing with HDR content in such a situation,
+                // dithering is essential to avoid banding artifacts.
                 color.rgb = dither(fromLinearRGB(nits / transferWhiteLevel(outTransferFunction), outTransferFunction));
+
                 if (clipToUnitInterval) {
                     color = clamp(color, vec4(0.0), vec4(1.0));
                 }
@@ -777,129 +895,6 @@ Screen::Screen(const Vector2i &size, const std::string &caption, bool resizable,
         m_cm_shader->set_buffer("indices", VariableType::UInt32, {3 * 2}, indices);
         m_cm_shader->set_buffer("position", VariableType::Float32, {4, 2}, positions);
         m_cm_shader->set_texture("ditherMatrix", m_dither_matrix);
-    }
-#endif
-}
-
-void Screen::initialize(GLFWwindow *window, bool shutdown_glfw) {
-    m_glfw_window = window;
-    m_shutdown_glfw = shutdown_glfw;
-    glfwGetWindowSize(m_glfw_window, &m_size[0], &m_size[1]);
-    glfwGetFramebufferSize(m_glfw_window, &m_fbsize[0], &m_fbsize[1]);
-
-    m_pixel_ratio = get_pixel_ratio(window);
-
-#if defined(EMSCRIPTEN)
-    double w, h;
-    emscripten_get_element_css_size("#canvas", &w, &h);
-    double ratio = emscripten_get_device_pixel_ratio(),
-           w2 = w * ratio, h2 = h * ratio;
-
-    if (w != m_size[0] || h != m_size[1]) {
-        /* The canvas element is configured as width/height: auto, expand to
-           the available space instead of using the specified window resolution */
-        nanogui_emscripten_resize_callback(0, nullptr, nullptr);
-        emscripten_set_resize_callback(nullptr, nullptr, false,
-                                       nanogui_emscripten_resize_callback);
-    } else if (w != w2 || h != h2) {
-        /* Configure for rendering on a high-DPI display */
-        emscripten_set_canvas_element_size("#canvas", (int) w2, (int) h2);
-        emscripten_set_element_css_size("#canvas", w, h);
-    }
-    m_fbsize = Vector2i((int) w2, (int) h2);
-    m_size = Vector2i((int) w, (int) h);
-#elif defined(_WIN32) || defined(__linux__)
-    if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND && m_pixel_ratio != 1 && !m_fullscreen)
-        glfwSetWindowSize(window, m_size.x() * m_pixel_ratio,
-                                  m_size.y() * m_pixel_ratio);
-#endif
-
-#if defined(NANOGUI_GLAD)
-    if (!glad_initialized) {
-        glad_initialized = true;
-        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
-            throw std::runtime_error("Could not initialize GLAD!");
-        glGetError(); // pull and ignore unhandled errors like GL_INVALID_ENUM
-    }
-#endif
-
-    int flags = NVG_ANTIALIAS;
-    if (m_stencil_buffer)
-       flags |= NVG_STENCIL_STROKES;
-#if !defined(NDEBUG)
-    flags |= NVG_DEBUG;
-#endif
-
-#if defined(NANOGUI_USE_OPENGL)
-    m_nvg_context = nvgCreateGL3(flags);
-#elif defined(NANOGUI_USE_GLES)
-    m_nvg_context = nvgCreateGLES2(flags);
-#elif defined(NANOGUI_USE_METAL)
-    void *nswin = glfwGetCocoaWindow(window);
-    metal_window_init(nswin, m_float_buffer);
-    metal_window_set_size(nswin, m_fbsize);
-    m_nvg_context = nvgCreateMTL(metal_layer(),
-                                 metal_command_queue(),
-                                 flags | NVG_TRIPLE_BUFFER);
-#endif
-
-    if (!m_nvg_context)
-        throw std::runtime_error("Could not initialize NanoVG!");
-
-    m_visible = glfwGetWindowAttrib(window, GLFW_VISIBLE) != 0;
-    set_theme(new Theme(m_nvg_context));
-    m_mouse_pos = Vector2i(0);
-    m_mouse_state = m_modifiers = 0;
-    m_drag_active = false;
-    m_last_interaction = glfwGetTime();
-    m_process_events = true;
-    m_redraw = true;
-    __nanogui_screens[m_glfw_window] = this;
-
-    for (size_t i = 0; i < (size_t) Cursor::CursorCount; ++i)
-        m_cursors[i] = glfwCreateStandardCursor(GLFW_ARROW_CURSOR + (int) i);
-
-#if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
-    // Initialize color management resources if needed
-    if (m_wants_color_management) {
-        m_cm_texture = new Texture(
-            pixel_format(),
-            Texture::ComponentFormat::Float32,
-            m_fbsize,
-            Texture::InterpolationMode::Nearest,
-            Texture::InterpolationMode::Nearest,
-            Texture::WrapMode::ClampToEdge,
-            1,
-            Texture::TextureFlags::ShaderRead | Texture::TextureFlags::RenderTarget
-        );
-
-        if (m_stencil_buffer || m_depth_buffer) {
-            m_cm_depth_texture = new Texture(
-                m_stencil_buffer ? Texture::PixelFormat::DepthStencil : Texture::PixelFormat::Depth,
-                Texture::ComponentFormat::UInt32,
-                m_fbsize,
-                Texture::InterpolationMode::Nearest,
-                Texture::InterpolationMode::Nearest,
-                Texture::WrapMode::ClampToEdge,
-                1,
-                Texture::TextureFlags::RenderTarget
-            );
-        }
-
-        m_cm_render_pass = new RenderPass(
-            {m_cm_texture},
-            m_depth_buffer ? m_cm_depth_texture : nullptr,
-            m_stencil_buffer ? m_cm_depth_texture : nullptr,
-            nullptr,
-            true
-        );
-
-        // Disable depth testing. We've only got a depth buffer in order to have a stencil buffer.
-        m_cm_render_pass->set_depth_test(RenderPass::DepthTest::Always, true);
-
-        // A color management pipeline has been set up at this point, but nanogui itself does not do any color math.
-        // Classes inheriting Screen should instantiate m_cm_shader if they want to use color management.
-        m_cm_shader = nullptr;
     }
 #endif
 
@@ -1062,10 +1057,12 @@ void Screen::draw_teardown() {
 
         m_cm_shader->set_texture("framebufferTexture", m_cm_texture);
 
-        float displaySdrWhiteLevel = m_display_sdr_white_level_override ? m_display_sdr_white_level_override.value() :
-                                                                          glfwGetWindowSdrWhiteLevel(m_glfw_window);
+        float display_sdr_white_level =
+            m_display_sdr_white_level_override ?
+            m_display_sdr_white_level_override.value() :
+            glfwGetWindowSdrWhiteLevel(m_glfw_window);
 
-        m_cm_shader->set_uniform("displaySdrWhiteLevel", displaySdrWhiteLevel);
+        m_cm_shader->set_uniform("displaySdrWhiteLevel", display_sdr_white_level);
         m_cm_shader->set_uniform("outTransferFunction", (int)glfwGetWindowTransfer(m_glfw_window));
 
         const auto display_chroma = chroma_from_wp_primaries(glfwGetWindowPrimaries(m_glfw_window));

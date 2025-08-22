@@ -191,22 +191,22 @@ Matrix3f chroma_to_rec709_matrix(const std::array<Vector2f, 4>& chroma) {
     return xyz_to_rgb(rec709_chroma(), 1) * rgb_to_xyz(chroma, 1);
 }
 
-std::array<Vector2f, 4> chroma_from_wp_primaries(int wpPrimaries) {
-    if (wpPrimaries == 10) {
+std::array<Vector2f, 4> chroma_from_wp_primaries(int wp_primaries) {
+    if (wp_primaries == 10) {
         // Special case for Adobe RGB (1998) primaries, which is not in the H.273 spec
         return adobe_chroma();
     }
 
-    return ituth273::chroma(ituth273::from_wp_primaries(wpPrimaries));
+    return ituth273::chroma(ituth273::from_wp_primaries(wp_primaries));
 }
 
-std::string_view wp_primaries_to_string(int wpPrimaries) {
-    if (wpPrimaries == 10) {
+std::string_view wp_primaries_to_string(int wp_primaries) {
+    if (wp_primaries == 10) {
         // Special case for Adobe RGB (1998) primaries, which is not in the H.273 spec
         return "adobe_rgb";
     }
 
-    return ituth273::to_string(ituth273::from_wp_primaries(wpPrimaries));
+    return ituth273::to_string(ituth273::from_wp_primaries(wp_primaries));
 }
 
 // Partial implementation of https://www.itu.int/rec/T-REC-H.273-202407-I/en
