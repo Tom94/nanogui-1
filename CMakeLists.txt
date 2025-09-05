@@ -451,13 +451,13 @@ target_compile_definitions(nanogui
     -DNANOGUI_BUILD
 )
 
-if (NOT NANOGUI_SKIP_STB_IMAGE_IMPLEMENTATION)
+if (NANOGUI_SKIP_STB_IMAGE_IMPLEMENTATION)
   # Frameworks that statically link to nanobind and which already include the
   # stb_image implementation bits can set this flag to avoid duplicate symbol
   # errors.
 
   target_compile_definitions(nanogui
-    PRIVATE -DNVG_STB_IMAGE_IMPLEMENTATION)
+    PRIVATE -DNVG_NO_STB_IMPLEMENTATION)
 endif()
 
 if (NANOGUI_SKIP_METAL_SHADER_PRECOMPILATION)
