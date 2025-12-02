@@ -234,6 +234,11 @@ void Texture::upload_async(const uint8_t *data, void (*callback)(void*), void *p
     memcpy(ptr, data, dataSize);
     CHK(glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER));
 
+    CHK(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
+    CHK(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
+    CHK(glPixelStorei(GL_UNPACK_SKIP_ROWS, 0));
+    CHK(glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0));
+
     upload(nullptr);
 
     CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
