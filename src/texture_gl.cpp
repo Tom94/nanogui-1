@@ -163,27 +163,23 @@ void Texture::upload(const uint8_t *data) {
             CHK(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
 
         const auto preallocate_mip_levels = [&]() {
-            // Pre-allocate mip levels to prevent a pipeline stall upon future glGenerateMipmap() calls
-            if (m_min_interpolation_mode == InterpolationMode::Trilinear ||
-                m_mag_interpolation_mode == InterpolationMode::Trilinear) {
-                GLint prev_pbo = 0;
-                CHK(glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prev_pbo));
-                if (prev_pbo != 0)
-                    CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
+            GLint prev_pbo = 0;
+            CHK(glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prev_pbo));
+            if (prev_pbo != 0)
+                CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
 
-                int mip_levels = 1 + (int) floor(log2((double) std::max(m_size.x(), m_size.y())));
-                CHK(glTexParameteri(tex_mode, GL_TEXTURE_MAX_LEVEL, mip_levels - 1));
+            int mip_levels = 1 + (int) floor(log2((double) std::max(m_size.x(), m_size.y())));
+            CHK(glTexParameteri(tex_mode, GL_TEXTURE_MAX_LEVEL, mip_levels - 1));
 
-                for (int level = 0; level < mip_levels; ++level) {
-                    GLsizei w = std::max(1, (GLsizei) m_size.x() >> level);
-                    GLsizei h = std::max(1, (GLsizei) m_size.y() >> level);
-                    CHK(glTexImage2D(tex_mode, level, internal_format_gl, w, h, 0,
-                                     pixel_format_gl, component_format_gl, nullptr));
-                }
-
-                if (prev_pbo != 0)
-                    CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, prev_pbo));
+            for (int level = 0; level < mip_levels; ++level) {
+                GLsizei w = std::max(1, (GLsizei) m_size.x() >> level);
+                GLsizei h = std::max(1, (GLsizei) m_size.y() >> level);
+                CHK(glTexImage2D(tex_mode, level, internal_format_gl, w, h, 0,
+                                 pixel_format_gl, component_format_gl, nullptr));
             }
+
+            if (prev_pbo != 0)
+                CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, prev_pbo));
         };
 
 #if defined(NANOGUI_USE_OPENGL)
@@ -194,17 +190,29 @@ void Texture::upload(const uint8_t *data) {
         }
 
         if (m_samples == 1) {
-            preallocate_mip_levels();
-            CHK(glTexImage2D(tex_mode, 0, internal_format_gl, (GLsizei) m_size.x(),
-                             (GLsizei) m_size.y(), 0, pixel_format_gl, component_format_gl, data));
+            // Pre-allocate mip levels to prevent a pipeline stall upon future glGenerateMipmap() calls
+            if (m_min_interpolation_mode == InterpolationMode::Trilinear ||
+                m_mag_interpolation_mode == InterpolationMode::Trilinear) {
+                preallocate_mip_levels();
+                CHK(glTexSubImage2D(tex_mode, 0, 0, 0, (GLsizei) m_size.x(), (GLsizei) m_size.y(),
+                                    pixel_format_gl, component_format_gl, data));
+            } else
+                CHK(glTexImage2D(tex_mode, 0, internal_format_gl, (GLsizei) m_size.x(),
+                                 (GLsizei) m_size.y(), 0, pixel_format_gl, component_format_gl, data));
         }
         else
             CHK(glTexImage2DMultisample(tex_mode, m_samples, internal_format_gl,
                                         (GLsizei) m_size.x(), (GLsizei) m_size.y(), false));
 #else
-        preallocate_mip_levels();
-        CHK(glTexImage2D(tex_mode, 0, internal_format_gl, (GLsizei) m_size.x(),
-                         (GLsizei) m_size.y(), 0, pixel_format_gl, component_format_gl, data));
+        // Pre-allocate mip levels to prevent a pipeline stall upon future glGenerateMipmap() calls
+        if (m_min_interpolation_mode == InterpolationMode::Trilinear ||
+            m_mag_interpolation_mode == InterpolationMode::Trilinear) {
+            preallocate_mip_levels();
+            CHK(glTexSubImage2D(tex_mode, 0, 0, 0, (GLsizei) m_size.x(), (GLsizei) m_size.y(),
+                                pixel_format_gl, component_format_gl, data));
+        } else
+            CHK(glTexImage2D(tex_mode, 0, internal_format_gl, (GLsizei) m_size.x(),
+                             (GLsizei) m_size.y(), 0, pixel_format_gl, component_format_gl, data));
 #endif
 
         if (!m_mipmap_manual && (m_min_interpolation_mode == InterpolationMode::Trilinear ||
