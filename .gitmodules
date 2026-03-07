@@ -12,4 +12,4 @@
     url = https://github.com/wjakob/nanobind
 [submodule "ext/nativefiledialog-extended"]
     path = ext/nativefiledialog-extended
-    url = https://github.com/mitsuba-renderer/nativefiledialog-extended
+    url = https://github.com/tom94/nativefiledialog-extended
