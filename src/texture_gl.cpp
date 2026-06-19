@@ -139,6 +139,8 @@ void Texture::init() {
 Texture::~Texture() {
     CHK(glDeleteTextures(1, &m_texture_handle));
     CHK(glDeleteRenderbuffers(1, &m_renderbuffer_handle));
+    if (m_pbo_handle)
+        CHK(glDeleteBuffers(1, &m_pbo_handle));
 }
 
 void Texture::upload(const uint8_t *data) {
@@ -240,26 +242,31 @@ void Texture::upload_async(const uint8_t *data, void (*callback)(void*), void *p
     // driver-owned PBO and then trigger an upload from there. By controlling the data,
     // the driver can upload asynchronously *in principle* which seems to actually happen
     // on some platforms (tested NVIDIA).
-    const size_t dataSize = bytes_per_pixel() * m_size.x() * m_size.y();
+    const size_t data_size = bytes_per_pixel() * m_size.x() * m_size.y();
 
-    GLuint pbo = 0;
-    CHK(glGenBuffers(1, &pbo));
-    CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo));
-    CHK(glBufferData(GL_PIXEL_UNPACK_BUFFER, dataSize, NULL, GL_STREAM_DRAW));
+    // Reuse a persistent PBO across calls; only (re)allocate when it must grow.
+    if (m_pbo_handle == 0)
+        CHK(glGenBuffers(1, &m_pbo_handle));
+    CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_pbo_handle));
+    if (data_size > m_pbo_size) {
+        CHK(glBufferData(GL_PIXEL_UNPACK_BUFFER, data_size, NULL, GL_STREAM_DRAW));
+        m_pbo_size = data_size;
+    }
 
-    void *ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, dataSize,
+    // GL_MAP_INVALIDATE_BUFFER_BIT orphans the prior contents, so the driver can
+    // hand us fresh storage without waiting for an in-flight upload to finish.
+    void *ptr = glMapBufferRange(GL_PIXEL_UNPACK_BUFFER, 0, data_size,
       GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
 
     if (!ptr) {
         CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
-        CHK(glDeleteBuffers(1, &pbo));
 
         callback(payload);
 
         throw std::runtime_error("Texture::upload_async(): failed to map PBO; likely OOM!");
     }
 
-    memcpy(ptr, data, dataSize);
+    memcpy(ptr, data, data_size);
     CHK(glUnmapBuffer(GL_PIXEL_UNPACK_BUFFER));
 
     CHK(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
@@ -270,7 +277,6 @@ void Texture::upload_async(const uint8_t *data, void (*callback)(void*), void *p
     upload(nullptr);
 
     CHK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
-    CHK(glDeleteBuffers(1, &pbo));
 #else
     upload(data);
 #endif
