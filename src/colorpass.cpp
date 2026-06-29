@@ -49,22 +49,20 @@ static DitherMatrix dither_matrix(float scale) {
 }
 
 #if defined(NANOGUI_USE_OPENGL)
-#  define GLSL_VERTEX_PRELUDE   "#version 330\n"
-#  define GLSL_FRAGMENT_PRELUDE "#version 330\n"
+#  define GLSL_PRELUDE "#version 110\n"
 #elif defined(NANOGUI_USE_GLES)
-#  define GLSL_VERTEX_PRELUDE \
-    "#version 300 es\n" \
+#  define GLSL_PRELUDE \
+    "#version 100\n" \
     "precision highp float;\n" \
     "precision highp sampler2D;\n"
-#  define GLSL_FRAGMENT_PRELUDE GLSL_VERTEX_PRELUDE
 #endif
 
-static const char *vertex_shader = GLSL_VERTEX_PRELUDE R"glsl(
+static const char *vertex_shader = GLSL_PRELUDE R"glsl(
     uniform vec2 dither_scale;
 
-    in vec2 position;
-    out vec2 imageUv;
-    out vec2 ditherUv;
+    attribute vec2 position;
+    varying vec2 imageUv;
+    varying vec2 ditherUv;
 
     void main() {
         vec2 pos = position * 0.5 + 0.5; // Convert from [-1, 1] to [0, 1]
@@ -75,11 +73,9 @@ static const char *vertex_shader = GLSL_VERTEX_PRELUDE R"glsl(
     }
 )glsl";
 
-static const char *fragment_shader = GLSL_FRAGMENT_PRELUDE R"glsl(
-    in vec2 imageUv;
-    in vec2 ditherUv;
-
-    out vec4 fragColor;
+static const char *fragment_shader = GLSL_PRELUDE R"glsl(
+    varying vec2 imageUv;
+    varying vec2 ditherUv;
 
     uniform sampler2D framebuffer_texture;
     uniform sampler2D dither_matrix;
@@ -322,11 +318,11 @@ static const char *fragment_shader = GLSL_FRAGMENT_PRELUDE R"glsl(
     }
 
     vec3 dither(vec3 color) {
-        return color + texture(dither_matrix, fract(ditherUv)).r;
+        return color + texture2D(dither_matrix, fract(ditherUv)).r;
     }
 
     void main() {
-        vec4 color = texture(framebuffer_texture, imageUv);
+        vec4 color = texture2D(framebuffer_texture, imageUv);
 
         // nanogui uses colors in extended sRGB with a scale that assumes SDR white corresponds to a value of 1. Hence, to convert to
         // absolute nits in the display's color space, we need to undo the extended sRGB transfer function, multiply by the SDR white
@@ -347,7 +343,7 @@ static const char *fragment_shader = GLSL_FRAGMENT_PRELUDE R"glsl(
             color = clamp(color, vec4(0.0), vec4(1.0));
         }
 
-        fragColor = color;
+        gl_FragColor = color;
     }
 )glsl";
 
