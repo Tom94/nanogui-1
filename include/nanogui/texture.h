@@ -281,9 +281,6 @@ protected:
     #if defined(NANOGUI_USE_OPENGL) || defined(NANOGUI_USE_GLES)
         uint32_t m_handle = 0;
         uint32_t m_renderbuffer_handle = 0;
-        /// Persistent pixel-unpack buffer reused by upload_async() (GL/GLES 3)
-        uint32_t m_pbo_handle = 0;
-        size_t m_pbo_size = 0;
     #elif defined(NANOGUI_USE_METAL)
         void *m_handle = nullptr;
         void *m_sampler_state_handle = nullptr;
