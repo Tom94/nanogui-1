@@ -236,6 +236,12 @@ public:
      */
     void upload_async(const uint8_t *data, void (*callback)(void*), void *payload);
 
+    /// Upload pixel data with possibly fewer channels than the texture, filling
+    /// remaining rgb with 0 and alpha with 1. Currently, only RGB->RGBA on macOS
+    /// is supported to compensate for Metal not supporting RGB textures.
+    void upload_async(const uint8_t *data, size_t src_channels, void (*callback)(void *),
+                      void *payload);
+
     /// Upload packed pixel data to a rectangular sub-region of the texture from the CPU to the GPU
     void upload_sub_region(const uint8_t *data, const Vector2i& origin, const Vector2i& size);
 

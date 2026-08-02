@@ -51,16 +51,165 @@ Texture::~Texture() {
     (void) (__bridge_transfer id<MTLSamplerState>) m_sampler_state_handle;
 }
 
+static const char *expand_kernel_source = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+constant bool swap_rb [[function_constant(0)]];
+
+#define EXPAND_NORM(NAME, T, SCALE, LO)                                        \
+kernel void NAME(device const T* src [[buffer(0)]],                            \
+        texture2d<float, access::write> dst [[texture(0)]],                    \
+        uint2 gid [[thread_position_in_grid]]) {                               \
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) {               \
+        return;                                                                \
+    }                                                                          \
+                                                                               \
+    uint i = 3 * (gid.y * dst.get_width() + gid.x);                            \
+    float3 rgb = float3(src[i], src[i + 1], src[i + 2]) * (SCALE);             \
+    rgb = clamp(rgb, LO, 1.0f);                                                \
+    if (swap_rb) {                                                             \
+        rgb = rgb.bgr;                                                         \
+    }                                                                          \
+                                                                               \
+    dst.write(float4(rgb, 1.0f), gid);                                         \
+}
+
+#define EXPAND_RAW(NAME, T)                                                    \
+kernel void NAME(device const T* src [[buffer(0)]],                            \
+        texture2d<float, access::write> dst [[texture(0)]],                    \
+        uint2 gid [[thread_position_in_grid]]) {                               \
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) {               \
+        return;                                                                \
+    }                                                                          \
+                                                                               \
+    uint i = 3 * (gid.y * dst.get_width() + gid.x);                            \
+    float3 rgb = float3(src[i], src[i + 1], src[i + 2]);                       \
+    if (swap_rb) {                                                             \
+        rgb = rgb.bgr;                                                         \
+    }                                                                          \
+                                                                               \
+    dst.write(float4(rgb, 1.0f), gid);                                         \
+}
+
+EXPAND_NORM(expand_rgb_u8,  uchar,  1.0f / 255.0f,    0.0f)
+EXPAND_NORM(expand_rgb_i8,  char,   1.0f / 127.0f,   -1.0f)
+EXPAND_NORM(expand_rgb_u16, ushort, 1.0f / 65535.0f,  0.0f)
+EXPAND_NORM(expand_rgb_i16, short,  1.0f / 32767.0f, -1.0f)
+EXPAND_RAW(expand_rgb_f16, half)
+EXPAND_RAW(expand_rgb_f32, float)
+)";
+
+static id<MTLComputePipelineState> expand_pipeline(Texture::ComponentFormat comp_fmt,
+                                                   bool swap_rb) {
+    // [format][swap_rb]
+    static id<MTLComputePipelineState> pipelines[6][2] = {};
+    static id<MTLLibrary> library = nil;
+    static std::mutex mutex;
+
+    size_t index;
+    const char *name;
+
+    switch (comp_fmt) {
+        case Texture::ComponentFormat::UInt8:
+            index = 0; name = "expand_rgb_u8";  break;
+        case Texture::ComponentFormat::Int8:
+            index = 1; name = "expand_rgb_i8";  break;
+        case Texture::ComponentFormat::UInt16:
+            index = 2; name = "expand_rgb_u16"; break;
+        case Texture::ComponentFormat::Int16:
+            index = 3; name = "expand_rgb_i16"; break;
+        case Texture::ComponentFormat::Float16:
+            index = 4; name = "expand_rgb_f16"; break;
+        case Texture::ComponentFormat::Float32:
+            index = 5; name = "expand_rgb_f32"; break;
+        default:
+            // UInt32/Int32 are demoted in resize(); depth formats never get here.
+            throw std::runtime_error(
+                "Texture::upload_interleaved_async(): invalid component format!");
+    }
+
+    size_t swap_index = swap_rb ? 1 : 0;
+
+    std::lock_guard<std::mutex> guard(mutex);
+
+    if (pipelines[index][swap_index]) {
+        return pipelines[index][swap_index];
+    }
+
+    id<MTLDevice> device = (__bridge id<MTLDevice>) metal_device();
+    NSError *error = nil;
+
+    if (!library) {
+        MTLCompileOptions *options = [MTLCompileOptions new];
+        options.fastMathEnabled = NO;
+
+        library = [device newLibraryWithSource: @(expand_kernel_source)
+                                       options: options
+                                         error: &error];
+
+        if (!library) {
+            throw std::runtime_error(
+                std::string("Texture::upload_interleaved_async(): could not compile "
+                            "expansion library: ") + [[error description] UTF8String]);
+        }
+    }
+
+    MTLFunctionConstantValues *constants = [MTLFunctionConstantValues new];
+    [constants setConstantValue: &swap_rb type: MTLDataTypeBool atIndex: 0];
+
+    id<MTLFunction> function = [library newFunctionWithName: @(name)
+                                             constantValues: constants
+                                                      error: &error];
+
+    if (!function) {
+        throw std::runtime_error(
+            std::string("Texture::upload_interleaved_async(): could not specialize "
+                        "kernel: ") + [[error description] UTF8String]);
+    }
+
+    pipelines[index][swap_index] =
+        [device newComputePipelineStateWithFunction: function error: &error];
+
+    if (!pipelines[index][swap_index]) {
+        throw std::runtime_error(
+            std::string("Texture::upload_interleaved_async(): could not create "
+                        "pipeline state: ") + [[error description] UTF8String]);
+    }
+
+    return pipelines[index][swap_index];
+}
+
 void Texture::upload_async(const uint8_t *data, void (*callback)(void*), void *payload) {
-    if (!data)
+    upload_async(data, channels(), callback, payload);
+}
+
+void Texture::upload_async(const uint8_t *data, size_t src_channels,
+                           void (*callback)(void *), void *payload) {
+    if (!data) {
         return;
+    }
+
+    if (src_channels != channels()) {
+        if (src_channels != 3 || channels() != 4 || (m_pixel_format != PixelFormat::RGBA &&
+            m_pixel_format != PixelFormat::BGRA)) {
+            throw std::runtime_error(
+                    "Texture::upload_async(): only 3 -> 4 channel expansion is supported!");
+        }
+
+        if (!(m_flags & TextureFlags::ShaderWrite)) {
+            throw std::runtime_error(
+                    "Texture::upload_async(): texture must be created with "
+                    "TextureFlags::ShaderWrite for expansion!");
+        }
+    }
 
     id<MTLTexture> texture = (__bridge id<MTLTexture>) m_handle;
     id<MTLDevice> device = (__bridge id<MTLDevice>) metal_device();
     id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>) metal_command_queue();
 
-    size_t data_size = bytes_per_pixel() * m_size.x() * m_size.y();
-    size_t bytes_per_row = bytes_per_pixel() * m_size.x();
+    size_t bytes_per_component = bytes_per_pixel() / channels();
+    size_t data_size = bytes_per_component * src_channels * m_size.x() * m_size.y();
 
     id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy: (void*)data
                                                      length: data_size
@@ -74,38 +223,62 @@ void Texture::upload_async(const uint8_t *data, void (*callback)(void*), void *p
                                     options: MTLResourceStorageModeShared];
     }
 
+    if (buffer == nil) {
+        throw std::runtime_error(
+            "Texture::upload_and_expand_async(): could not allocate staging buffer!");
+    }
+
     id<MTLCommandBuffer> command_buffer = [command_queue commandBuffer];
-    id<MTLBlitCommandEncoder> blit_encoder = [command_buffer blitCommandEncoder];
 
-    [blit_encoder copyFromBuffer: buffer
-                    sourceOffset: 0
-               sourceBytesPerRow: bytes_per_row
-             sourceBytesPerImage: data_size
-                      sourceSize: MTLSizeMake(m_size.x(), m_size.y(), 1)
-                       toTexture: texture
-                destinationSlice: 0
-                destinationLevel: 0
-               destinationOrigin: MTLOriginMake(0, 0, 0)];
+    if (src_channels != channels()) {
+        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
 
-    [blit_encoder endEncoding];
+        bool swap_rb = m_pixel_format == PixelFormat::BGRA;
+        id<MTLComputePipelineState> pipeline = expand_pipeline(m_component_format, swap_rb);
+
+        [encoder setComputePipelineState: pipeline];
+        [encoder setBuffer: buffer offset: 0 atIndex: 0];
+        [encoder setTexture: texture atIndex: 0];
+
+        NSUInteger tg_w = pipeline.threadExecutionWidth;
+        NSUInteger tg_h = pipeline.maxTotalThreadsPerThreadgroup / tg_w;
+
+        [encoder dispatchThreads: MTLSizeMake(m_size.x(), m_size.y(), 1)
+            threadsPerThreadgroup: MTLSizeMake(tg_w, tg_h, 1)];
+        [encoder endEncoding];
+    } else {
+        id<MTLBlitCommandEncoder> blit_encoder = [command_buffer blitCommandEncoder];
+        size_t bytes_per_row = bytes_per_pixel() * m_size.x();
+
+        [blit_encoder copyFromBuffer: buffer
+                        sourceOffset: 0
+                   sourceBytesPerRow: bytes_per_row
+                 sourceBytesPerImage: data_size
+                          sourceSize: MTLSizeMake(m_size.x(), m_size.y(), 1)
+                           toTexture: texture
+                    destinationSlice: 0
+                    destinationLevel: 0
+                   destinationOrigin: MTLOriginMake(0, 0, 0)];
+
+        [blit_encoder endEncoding];
+    }
 
     if (!m_mipmap_manual &&
         (m_min_interpolation_mode == InterpolationMode::Trilinear ||
          m_mag_interpolation_mode == InterpolationMode::Trilinear)) {
         id<MTLBlitCommandEncoder> mipmap_encoder = [command_buffer blitCommandEncoder];
-        [mipmap_encoder generateMipmapsForTexture:texture];
+        [mipmap_encoder generateMipmapsForTexture: texture];
         [mipmap_encoder endEncoding];
     }
 
     if (callback) {
-        [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+        [command_buffer addCompletedHandler: ^(id<MTLCommandBuffer> cb) {
             dispatch_async((__bridge dispatch_queue_t) metal_cleanup_queue(), ^{
                 callback(payload);
             });
         }];
         [command_buffer commit];
     } else {
-        // Synchronous path - wait for completion
         [command_buffer commit];
         [command_buffer waitUntilCompleted];
     }
@@ -334,8 +507,8 @@ void Texture::resize(const Vector2i &size) {
     if (m_flags & (uint8_t) TextureFlags::ShaderWrite)
         texture_desc.usage |= MTLTextureUsageShaderWrite;
     if (texture_desc.usage == 0)
-        throw std::runtime_error("Texture::Texture(): flags must either "
-                                 "specify ShaderRead, RenderTarget, or both!");
+        throw std::runtime_error("Texture::Texture(): flags must have at least one of "
+                                 "ShaderRead, RenderTarget, and ShaderWrite!");
 
     id<MTLTexture> texture = [device newTextureWithDescriptor:texture_desc];
     m_handle = (__bridge_retained void *) texture;
