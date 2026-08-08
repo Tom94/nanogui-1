@@ -172,8 +172,9 @@ void run(RunMode run_mode) {
         // Process events once more
         glfwPollEvents();
     } catch (const std::exception &e) {
-        fprintf(stderr, "Caught exception in main loop: %s", e.what());
+        // fprintf(stderr, "Caught exception in main loop: %s", e.what());
         leave();
+        throw;
     }
 }
 
