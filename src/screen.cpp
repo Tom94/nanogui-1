@@ -704,7 +704,7 @@ void Screen::draw_setup() {
         }
         glfwSwapInterval(interval);
 #else
-        bool vsync = run_mode == RunMode::VSync;
+        bool vsync = run_mode == RunMode::VSync || run_mode == RunMode::Lazy;
         metal_window_set_vsync(m_nswin, vsync);
 #endif
         // Create or destroy tooltip timer based on run mode
